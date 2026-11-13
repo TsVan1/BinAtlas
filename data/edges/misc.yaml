@@ -1,0 +1,194 @@
+# BinAtlas 知识库 · 关系边 · 杂项（applies_to）
+# 规范：03-DATA-SCHEMA.md §3（kind 语义 / 必填字段 / 方向语义）
+# 本批 29 条，全部为 applies_to（技法/工具 → 载体）。
+#
+# 选取原则：19 个载体每个至少一条入边，保证矩阵视图的列不为空、图里没有
+# 孤立的载体节点；在此之上只补"换一个来源能提供新信息"的组合，不把一个
+# 节点的 artifacts 字段全量翻成边（那是把冗余当连接）。
+#
+# 为什么本文件没有 detects / bypasses / implemented_in / teaches：
+# 节点库里不存在 atk: / eco: / plugin 节点（当前只有 domain / technique /
+# artifact / tool 四类），这四种 kind 一律无合法端点。缺什么记入
+# ORPHAN-NEEDS.md，不为了凑 kind 覆盖而编造端点或扭曲方向。
+
+# ============ 可执行体与字节码 ============
+
+- from: tech:malware-static-triage
+  to: art:pe32
+  kind: applies_to
+  weight: 0.95
+  rationale: PE32 是恶意样本研判的主力载体：DOS/NT 头、导入表、节区熵与资源段本身就是初判信号，加壳后这几处最先失真，正是研判要判断"哪些字段还可信"的地方。
+
+- from: tech:executable-unpacking
+  to: art:pe64
+  kind: applies_to
+  weight: 0.9
+  rationale: 64 位样本的壳与 32 位同源但指针宽度不同，内联补丁与地址计算不能照搬 32 位经验，转储后的重定位修复必须按 PE32+ 的可选头与基址重来一遍。
+
+- from: tool:capa
+  to: art:pe-dotnet
+  kind: applies_to
+  weight: 0.7
+  rationale: .NET 样本的真实逻辑在 CIL 与元数据表里，capa 能对托管程序集做能力匹配（API 组合落在 IL 层的调用点上），这是它对原生 PE 能力的补充面。
+
+- from: tech:firmware-extraction
+  to: art:elf32
+  kind: applies_to
+  weight: 0.85
+  rationale: 解包产出的服务程序多数是 32 位 ELF，且 MIPS 与 ARM 并存、字节序需单独确认，能否正确识别这些 ELF32 决定后续反汇编是否从一开始就错。
+
+- from: tech:firmware-emulation
+  to: art:elf64
+  kind: applies_to
+  weight: 0.8
+  rationale: 新一代固件开始出现 64 位服务，仿真时地址与基址的关系（PIE + GOT 相对寻址）比 32 位更易被误读，跑通之前通常要先修正加载基址。
+
+- from: tool:ghidra
+  to: art:elf64
+  kind: applies_to
+  weight: 0.8
+  rationale: 大型 ELF64 是 Ghidra 的主场：处理器模块覆盖到位、headless 可批量加载，GOT/PLT 与重定位的自动解析能把间接调用还原成可读的交叉引用。
+
+- from: tool:binary-ninja
+  to: art:mach-o
+  kind: applies_to
+  weight: 0.7
+  rationale: Mach-O 的段与加载命令结构在 Binary Ninja 里会被展开成可读布局，ObjC 元数据解析直接给出类与方法表，iOS 侧静态分析少一层手工还原。
+
+- from: tech:mobile-app-unpacking
+  to: art:so
+  kind: applies_to
+  weight: 0.85
+  rationale: 加固方案常把核心逻辑下沉到原生库，so 段的加密与反注入使转储产物缺符号与重定位信息，脱壳的重点工作正是修复这些结构。
+
+- from: tech:mobile-runtime-instrumentation
+  to: art:so
+  kind: applies_to
+  weight: 0.8
+  rationale: JNI 注册结构与关键判断多落在 so 里，插桩时要在原生层挂钩 RegisterNatives 与导出函数，才能在 Java 层之外看到真实的加解密与校验逻辑。
+
+- from: tech:mobile-app-static-analysis
+  to: art:apk
+  kind: applies_to
+  weight: 0.95
+  rationale: APK 是移动静态分析的主入口：清单与签名块给出权限与组件面，classes.dex 与原生库决定要看哪一层，加固改写痕迹也从包结构的不一致处开始暴露。
+
+- from: tool:burp-suite
+  to: art:apk
+  kind: applies_to
+  weight: 0.6
+  rationale: 移动应用的接口分析多数以 APK 为起点，先确认目标是否走系统信任链、有没有自带证书，再决定代理证书是否能被接受，这一步直接决定抓包能否成立。
+
+- from: tech:mobile-runtime-instrumentation
+  to: art:dex
+  kind: applies_to
+  weight: 0.85
+  rationale: 加固应用的 dex 在磁盘上是空壳，真实字节码只在运行时被解密装载；插桩的价值就在于内存中拿到解密后的 dex，再离线修复成可反编译的产物。
+
+- from: tech:mobile-app-static-analysis
+  to: art:ipa
+  kind: applies_to
+  weight: 0.8
+  rationale: IPA 的分析入口是签名与描述文件，再看 Payload 下的 Mach-O 是否被 App Store 加密；加密未解时静态结论只能停在包结构层，看不出真实逻辑。
+
+- from: tech:mobile-app-static-analysis
+  to: art:jar
+  kind: applies_to
+  weight: 0.6
+  rationale: 第三方 SDK 多以 jar 分发、混淆程度低于商业加固，作为 APK 里的依赖被一并审计；它的可读性常反过来成为推断宿主应用逻辑的旁证。
+
+- from: tool:unicorn
+  to: art:shellcode
+  kind: applies_to
+  weight: 0.9
+  rationale: Shellcode 没有文件格式也没有导入表，正需要一个只提供 CPU 语义的仿真器：给它分配一段内存、设好寄存器就能单步执行，API 解析逻辑由分析者自己打桩还原。
+
+- from: tech:executable-unpacking
+  to: art:shellcode
+  kind: applies_to
+  weight: 0.55
+  rationale: 加壳样本最终常把 shellcode 释放进内存执行，脱壳的终点之一就是从内存里抠出这段位置无关代码，再交给仿真器或调试器单独分析。
+
+- from: tech:behavioral-dynamic-analysis
+  to: art:pe32
+  kind: applies_to
+  weight: 0.9
+  rationale: PE32 样本在隔离环境里跑起来才会暴露持久化、提权与外联动作；静态看不到的延时触发与二次载荷下载，都靠这一类载体在运行时观察。
+
+# ============ 固件与固件镜像 ============
+
+- from: tool:radare2
+  to: art:firmware-image
+  kind: applies_to
+  weight: 0.65
+  rationale: 固件镜像没有标准容器，r2 可直接把整包当原始二进制打开，用 magic 搜索与偏移跳转定位可疑段，不必先猜厂商封装格式；这正是它在嵌入式场景的价值。
+
+- from: tool:qemu
+  to: art:firmware-image
+  kind: applies_to
+  weight: 0.7
+  rationale: 系统模式下 QEMU 能把固件镜像当整机启动，用来验证启动链与外设初始化到哪里断掉；这一步失败往往就是仿真卡死的起点，需要据输出逐个补桩。
+
+- from: tool:aflpp
+  to: art:firmware-image
+  kind: applies_to
+  weight: 0.65
+  rationale: 无源码固件是 AFL++ QEMU 模式最典型的输入：解包出的服务二进制直接在其上做覆盖引导变异，不必先拿到可插桩的构建环境，这是嵌入式漏洞挖掘里最省前置条件的一条路。
+
+- from: tech:uefi-firmware-analysis
+  to: art:uefi-bios
+  kind: applies_to
+  weight: 0.95
+  rationale: UEFI 映像按固件卷与固件文件系统分层组织，分析对象是各引导阶段的驱动与 NVRAM 变量，关注点是签名校验能否被绕过、哪一阶段可写。
+
+- from: tech:firmware-diffing
+  to: art:rtos-image
+  kind: applies_to
+  weight: 0.7
+  rationale: RTOS 固件没有通用文件系统、代码与数据整体链接成单一映像，跨版本差分只能靠函数级匹配而非文件比对，地址漂移与函数重排是主要噪声来源。
+
+# ============ 运行时现场与流量 ============
+
+- from: tool:volatility3
+  to: art:memory-dump
+  kind: applies_to
+  weight: 0.95
+  rationale: 内存镜像没有格式信息，符号与结构全靠按特征重新定位；Volatility 靠目标系统的符号表（ISF）重建进程与模块结构，符号不匹配时多数插件直接失效。
+
+- from: tech:behavioral-dynamic-analysis
+  to: art:memory-dump
+  kind: applies_to
+  weight: 0.7
+  rationale: 样本退出或被反调试终止后，内存镜像里仍留着已解密的代码段、注入痕迹与凭据残留，是"运行结束后"这段观察唯一还可取证的对象。
+
+- from: tool:wireshark
+  to: art:pcap
+  kind: applies_to
+  weight: 0.95
+  rationale: pcap 是唯一能还原协议字段边界的证据形态：流重组、显示过滤器与 TLS 解密把行为串成会话，加密流量下至少还剩连接时序与 SNI 一类元数据可用。
+
+- from: tech:network-traffic-interception
+  to: art:pcap
+  kind: applies_to
+  weight: 0.8
+  rationale: 拦截的结果要落成可回放的 pcap 才算证据：私有二进制协议没有字段边界，只能靠同一接口多次请求的字节差异反推结构，样本序列本身就是推断材料。
+
+# ============ 文档与脚本 ============
+
+- from: tech:malware-static-triage
+  to: art:document
+  kind: applies_to
+  weight: 0.8
+  rationale: 带主动内容的文档本体是结构化容器而非可执行文件，研判要看的是自动执行触发链与外联行为，所以分析路径与 PE 完全不同，不能按文件头结构套。
+
+- from: tool:cyberchef
+  to: art:script
+  kind: applies_to
+  weight: 0.75
+  rationale: 脚本样本的可执行内容就是源文本，混淆手段集中在编码与拼接套娃上；CyberChef 的操作链正好逐层剥开，并把还原步骤固化成可复现的交付物。
+
+- from: tech:detection-signature-authoring
+  to: art:document
+  kind: applies_to
+  weight: 0.6
+  rationale: 文档类威胁的特征不能只看宏代码文本，还要约束容器结构（OLE 流名、嵌入对象与触发关系），否则规则会被正常的带宏文档大面积误报。

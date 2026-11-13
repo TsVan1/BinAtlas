@@ -1,0 +1,231 @@
+# BinAtlas 知识库 · 关系边 · 关系类（upstream / alternative / complements）
+# 规范：03-DATA-SCHEMA.md §3（kind 语义 / 必填字段 / 方向语义）
+# 本批 32 条：upstream 16 · alternative 7 · complements 9
+#
+# order 约定：按流水线上该边目标环节的相对位置取值（10/20/30/40/50），
+# 留出插入空间；同一条流水线内数字单调递增，保证拓扑排序稳定。
+#
+# 本批刻意**不写 supersedes**：现有 20 个工具节点之间不存在"新版取代旧版"的
+# 真实配对（OllyDbg / Volatility 2 / PEiD 等被取代方均未建节点），
+# 缺什么记入 ORPHAN-NEEDS.md，不编造。
+
+# ============ upstream：分析师拿到样本的真实顺序 ============
+
+- from: tech:firmware-extraction
+  to: tech:firmware-emulation
+  kind: upstream
+  order: 20
+  weight: 0.9
+  rationale: 仿真要把固件里的服务二进制与其依赖库摆进可执行环境，而文件系统目录树只有解包之后才存在；未解包时连要跑哪个进程都无从确定。
+
+- from: tech:firmware-extraction
+  to: tech:uefi-firmware-analysis
+  kind: upstream
+  order: 20
+  weight: 0.85
+  rationale: UEFI 分析的对象是整包里的固件卷，得先切出卷边界与厂商封装头，解析器才有输入；直接对 SPI 整包做结构解析会卡在私有头上。
+
+- from: tech:firmware-extraction
+  to: tech:hardcoded-credential-mining
+  kind: upstream
+  order: 20
+  weight: 0.9
+  rationale: 凭据挖掘的输入是解包后的配置目录与可执行体，未解包时连 /etc 与 Web 根目录在哪都不知道，扫描范围无从划定。
+
+- from: tech:firmware-extraction
+  to: tech:firmware-diffing
+  kind: upstream
+  order: 20
+  weight: 0.85
+  rationale: 版本差分比对的是两侧解包后的可执行体与配置，若一侧未解包，比对结果会被封装头与填充区的差异淹没，得不出函数级变化。
+
+- from: tech:firmware-emulation
+  to: tech:hardcoded-credential-mining
+  kind: upstream
+  order: 30
+  weight: 0.6
+  rationale: 候选凭据"是否真能被远程使用"必须把服务跑起来实测，仿真提供的可交互实例就是可达性判定的执行环境；无仿真时这一判定只能退化成纸面推测。
+
+- from: tech:mobile-app-static-analysis
+  to: tech:mobile-runtime-instrumentation
+  kind: upstream
+  order: 20
+  weight: 0.9
+  rationale: 插桩脚本要挂钩具体类名与方法签名，混淆后的符号只能靠静态分析先定位；没有静态结论就只能盲扫内存，效率极低。
+
+- from: tech:mobile-runtime-instrumentation
+  to: tech:mobile-app-unpacking
+  kind: upstream
+  order: 30
+  weight: 0.9
+  rationale: 加固方案的自解密点只在运行时暴露，必须先用插桩定位解密入口与 dex 加载时机，才谈得上转储与结构修复。
+
+- from: tech:mobile-app-static-analysis
+  to: tech:android-component-surface-audit
+  kind: upstream
+  order: 20
+  weight: 0.85
+  rationale: 导出组件清单要先从清单文件与 dex 里枚举，静态分析给出待验证目标，审计环节负责逐个做实机调用与越权验证。
+
+- from: tech:mobile-app-static-analysis
+  to: tech:network-traffic-interception
+  kind: upstream
+  order: 20
+  weight: 0.8
+  rationale: 接口域名、证书固定的实现位置与私有协议线索都在静态层先拿到，先读代码再抓包能省掉大量盲试；固定实现看清了才知道该拦哪一处校验。
+
+- from: tech:malware-static-triage
+  to: tech:behavioral-dynamic-analysis
+  kind: upstream
+  order: 20
+  weight: 0.9
+  rationale: 静态研判给出样本类型与可疑能力，决定动态分析该配什么环境、重点观察哪些行为（如是否需要模拟特定厂商进程），避免盲跑与漏观察。
+
+- from: tech:malware-static-triage
+  to: tech:executable-unpacking
+  kind: upstream
+  order: 30
+  weight: 0.85
+  rationale: 是否加壳、什么壳由静态研判判定；这个结论决定要不要进脱壳环节，判错方向（例如把自研壳当 UPX）会让后续所有静态信号继续失真。
+
+- from: tech:behavioral-dynamic-analysis
+  to: tech:executable-unpacking
+  kind: upstream
+  order: 30
+  weight: 0.85
+  rationale: 原始入口点与自解密结束点要在运行时才观察得到，动态跑出"何时解压完成"是选择转储时机的前提，纯静态只能猜 OEP。
+
+- from: tech:executable-unpacking
+  to: tech:detection-signature-authoring
+  kind: upstream
+  order: 40
+  weight: 0.9
+  rationale: 加壳样本的字节串特征几乎全落在壳上，一上线就误报且壳一换即失效；必须等还原体出来再取特征，规则才描述得到真实能力。
+
+- from: tech:malware-static-triage
+  to: tech:detection-signature-authoring
+  kind: upstream
+  order: 40
+  weight: 0.6
+  rationale: 未加壳样本不必绕脱壳一圈：静态研判得到的导入函数组合、互斥体名与字符串即可直接固化成首版规则，是流水线上的捷径分支。
+
+- from: tech:behavioral-dynamic-analysis
+  to: tech:detection-signature-authoring
+  kind: upstream
+  order: 40
+  weight: 0.7
+  rationale: 动态产出的网络与注册表 IOC 本身就是可下发的检测特征，它与静态特征互补、共同构成规则集，缺了行为特征只能扫已知字节串。
+
+- from: tech:behavioral-dynamic-analysis
+  to: tech:malware-family-attribution
+  kind: upstream
+  order: 50
+  weight: 0.8
+  rationale: 行为签名（C2 域名构造规律、心跳节奏、持久化手法）比静态特征更难伪装，是"相似不等于同源"判定里最硬的一类证据，必须在聚类前先拿到。
+
+# ============ alternative：解决同一具体问题、可互相替换 ============
+
+- from: tool:ida-pro
+  to: tool:ghidra
+  kind: alternative
+  switch_cost: high
+  tradeoff: 换到 Ghidra 会失去 Hex-Rays 在复杂 C++ 类型与模板上的反编译质量、最大的第三方插件存量，以及对畸形与陈旧样本格式的容忍度；换来零许可成本与可审计的分析算法。
+  rationale: 两者都提供多架构反汇编 + 反编译 + 图形化交叉引用 + 脚本接口，面向同一项"静态理解二进制并长期维护同一份分析工程"的任务，是同一预算位置上的两个主选。
+
+- from: tool:ida-pro
+  to: tool:binary-ninja
+  kind: alternative
+  switch_cost: high
+  tradeoff: 换到 Binary Ninja 会失去 Hex-Rays 的 C++ 反编译深度、IDA 庞大的插件与脚本存量，以及老样本上的格式识别经验；换来分层 IL 与更适合自动化的 Python API。
+  rationale: 同为商业级反汇编与反编译平台，都能吃 PE/ELF/Mach-O 并提供脚本扩展，选型时直接竞争同一笔预算，替换的只是分析工程的承载工具。
+
+- from: tool:ghidra
+  to: tool:binary-ninja
+  kind: alternative
+  switch_cost: medium
+  tradeoff: 换到 Binary Ninja 会失去免费分发与更广的冷门架构处理器模块覆盖，团队扩大后许可成本随之上升；换来明显的首次分析速度与更清晰的 MLIL/HLIL 中间层。
+  rationale: 两者都以"可脚本化的多架构反编译平台"为核心，都提供 headless 批处理与 IL 层接口，在同一批自动化分析任务上可以直接替换。
+
+- from: tool:radare2
+  to: tool:ghidra
+  kind: alternative
+  switch_cost: medium
+  tradeoff: 换到 Ghidra 会失去 r2 那种随包可跑的原生命令行工作流与 r2pipe 的轻量嵌入能力（固件与容器里不必带整套 JVM），换来真正可读的反编译输出。
+  rationale: 两者都能无界面跑多架构反汇编与交叉引用、都可脚本批量驱动，在做"批量扫描大量二进制"这类任务时是同一位置的两个免费选项。
+
+- from: tool:radare2
+  to: tool:binary-ninja
+  kind: alternative
+  switch_cost: medium
+  tradeoff: 换到 Binary Ninja 会失去免费许可与纯 CLI 的无依赖部署（塞进固件镜像或精简容器就跑），换来 IL 分层、图形化交叉引用与更稳的脚本 API。
+  rationale: 都面向"用脚本把反汇编接进自有流水线"的需求：r2 靠 r2pipe，Binja 靠官方 Python API，同一段批量分析逻辑两端都能实现。
+
+- from: tool:gdb-pwndbg
+  to: tool:lldb
+  kind: alternative
+  switch_cost: medium
+  tradeoff: 换到 LLDB 会失去 pwndbg 的堆与结构体可视化、GEF/peda 一类增强生态，以及 Linux 侧最丰富的经验积累；换来 Apple 平台原生支持与与 Clang 一致的表达式求值。
+  rationale: 两者都是带脚本 API 的原生调试器，对 Linux ELF64 目标可完成同一套断点、内存与寄存器级调试，是同一任务上的两个可选前端。
+
+- from: tool:unicorn
+  to: tool:angr
+  kind: alternative
+  switch_cost: medium
+  tradeoff: 换到 angr 会失去确定性具体执行与"哪条指令不支持"的直观报错，换来路径约束求解；代价是速度慢几个数量级，且建模假设不对时会静默给出错误结论。
+  rationale: 两者都解决"让一段没有宿主操作系统的机器码跑起来并观察结果"的问题：Unicorn 走具体执行，angr 走符号执行，分析解密与校验片段时是同一任务的两个解法。
+
+# ============ complements：流水线步骤内的配合使用 ============
+
+- from: tool:qemu
+  to: tool:aflpp
+  kind: complements
+  weight: 0.8
+  rationale: 固件服务在 QEMU 用户态里跑起来之后，AFL++ 的 QEMU 模式可直接在其上做覆盖引导变异，不必先拿到源码做插桩；无源码固件的 fuzz 基本都走这个组合。
+
+- from: tool:qemu
+  to: tool:gdb-pwndbg
+  kind: complements
+  weight: 0.85
+  rationale: qemu-user 用 -g 打开 gdbstub 后由 GDB 接管，才能在仿真环境里下断点、改寄存器、验证漏洞是否真的可达；缺了调试器这一端，仿真只剩黑盒观察。
+
+- from: tool:x64dbg
+  to: tool:detect-it-easy
+  kind: complements
+  weight: 0.8
+  rationale: DIE 给出壳类型与节区熵，决定在 x64dbg 里该找什么形态的自解密循环；反过来 x64dbg 实测到的真实入口点又能验证 DIE 的壳判定是否准确，两者互为对方的校验。
+
+- from: tool:detect-it-easy
+  to: tool:capa
+  kind: complements
+  weight: 0.7
+  rationale: 加壳样本的 capa 能力结论会严重失真，先由 DIE 判定是否加壳、什么壳，才能决定 capa 输出是可信结论还是必须等脱壳后重跑。
+
+- from: tool:capa
+  to: tool:yara
+  kind: complements
+  weight: 0.75
+  rationale: capa 的规则本身以 YARA 语法书写，能力标签可下探成 YARA 批扫规则；而 YARA 在样本库上的命中分布又能反过来检验 capa 规则的覆盖面，两者的规则语言同源。
+
+- from: tool:volatility3
+  to: tool:yara
+  kind: complements
+  weight: 0.7
+  rationale: 内存镜像里已解密的载荷没有文件格式可匹配，用 Volatility 导出进程内存段再交给 YARA 扫，是定位无文件攻击与内存马残留的常用组合。
+
+- from: tool:frida
+  to: tool:burp-suite
+  kind: complements
+  weight: 0.8
+  rationale: 证书固定挡在中间时，Frida 负责在客户端改信任锚点让连接放行、Burp 负责在链路上拦截改包与重放；缺任一端，移动接口分析都会停在握手失败。
+
+- from: tech:mobile-runtime-instrumentation
+  to: tech:network-traffic-interception
+  kind: complements
+  weight: 0.8
+  rationale: 抓包在目标不做证书固定时能独立完成；一旦遇到固定或双向认证，必须先插桩绕过校验才拿得到明文，两段工序在同一条流水线上前后咬合。
+
+- from: tech:executable-unpacking
+  to: tech:malware-static-triage
+  kind: complements
+  weight: 0.7
+  rationale: 脱壳不是终点：还原体要回静态研判重跑一遍才敢下结论，而研判给出的壳判定又决定是否进入脱壳——这是整条流水线上唯一必须往返的一段，用配合关系而非先后关系表达。
