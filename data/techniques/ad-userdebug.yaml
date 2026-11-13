@@ -61,7 +61,7 @@
   false_positive_risk: low
   commands:
   - cmd: cat /proc/{{pid}}/maps | grep -E "r-xp"
-    note: 取可执行映射区间，一个模块首个 r-xp 区间的起点通常就是基址
+    note: 取可执行映射区间，基址取文件偏移为 0 的那段映射的起点（通常是最低地址，往往是只读段），首个 r-xp 段不一定是基址
   - cmd: gdb -q -batch -p {{pid}} -ex "info sharedlibrary"
     note: 列出共享库及加载地址，输出里的起始地址列即基址
   - cmd: readelf -l {{binary}} | grep -A1 LOAD
