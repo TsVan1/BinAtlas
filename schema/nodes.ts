@@ -6,7 +6,7 @@
  * 两条贯穿全文件的约定：
  * 1. 所有对象一律 loose：§2.6 的 `_` 开头元字段注入合并视图后不得报错。
  * 2. `source` / `verified_at` 不在这里强制 —— §4.5 按节点类型决定是否强制，
- *    由校验器 V9 / V9b 负责，避免同一处缺字段被 V1 和 V9 重复报两遍。
+ *    由校验器 V9 / V16 负责，避免同一处缺字段被 V1 和 V9 重复报两遍。
  */
 import { z } from 'zod';
 import {
@@ -85,7 +85,8 @@ export const TechniqueSchema = loose({
   domain: z.array(domRefId).min(1),
   def: nonEmptyText,
   difficulty: score,
-  prerequisites: z.array(prereqRefId).optional(),
+  /** §2.2 字段表：必填，但允许为空数组 */
+  prerequisites: z.array(prereqRefId),
   artifacts: z.array(artRefId).min(1),
   outputs: z.array(nonEmptyText).min(1),
   cost: z.enum(TRI_LEVELS),
@@ -126,32 +127,33 @@ export const ConceptSchema = loose({
   ...provenanceShape,
 });
 
-/** §2.4 format —— 该节无字段表，只强制身份与定义 */
+/** §2.4 format（必填字段见 §2.7 字段表：name def platforms[]） */
 export const FormatSchema = loose({
   ...base,
   def: nonEmptyText,
-  platforms: z.array(z.enum(PLATFORMS)).min(1).optional(),
-  parsers: z.array(anyRefId).optional(),
+  platforms: z.array(z.enum(PLATFORMS)).min(1),
+  /** §2.7 标注 parsers[] → tool: */
+  parsers: z.array(idOf('tool')).optional(),
   ...provenanceShape,
 });
 
-/** §2.4 attack */
+/** §2.4 attack（必填字段见 §2.7：name def targets[] difficulty） */
 export const AttackSchema = loose({
   ...base,
   def: nonEmptyText,
-  targets: z.array(artRefId).optional(),
+  targets: z.array(artRefId),
   countermeasures: z.array(anyRefId).optional(),
   difficulty: score,
   ...provenanceShape,
 });
 
-/** §2.4 ecosystem —— §4.5 要求 source + verified_at（示例里没有，见报告） */
+/** §2.4 ecosystem（必填字段见 §2.7：covers[] free；source/verified_at 由 V9/V16 兜） */
 export const EcosystemSchema = loose({
   ...base,
   kind: z.enum(ECOSYSTEM_KINDS),
   url: nonEmptyText,
-  covers: z.array(idOf('tech')).optional(),
-  free: z.boolean().optional(),
+  covers: z.array(idOf('tech')),
+  free: z.boolean(),
   ...provenanceShape,
 });
 

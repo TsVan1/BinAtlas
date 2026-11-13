@@ -339,7 +339,6 @@ export function validate(opts: ValidateOptions): ValidateResult {
   // ---- V2：ID 唯一性与命名规范 ----
   const ID_RE = /^(tool|tech|art|dom|con|fmt|atk|eco|ai):([a-z0-9]+(?:-[a-z0-9]+)*)$/;
   const seenIds = new Map<string, NodeRecord>();
-  const seenSlugs = new Map<string, NodeRecord>();
   for (const node of nodeRecords) {
     const m = ID_RE.exec(node.id);
     if (!m) {
@@ -381,23 +380,8 @@ export function validate(opts: ValidateOptions): ValidateResult {
       });
       continue;
     }
+    // §1：只要求 ID 字符串全局唯一；slug 允许跨类型重复（tool:upx 与 art:upx 因前缀不同无歧义）
     seenIds.set(node.id, node);
-
-    // §1：「全局唯一（跨类型也不允许重名）」——slug 也不许跨类型撞车
-    const prevSlug = seenSlugs.get(slug);
-    if (!prevSlug) {
-      seenSlugs.set(slug, node);
-    } else if (prevSlug.type !== node.type) {
-      add({
-        rule: 'V2',
-        level: 'error',
-        file: node.file,
-        line: node.lineOf(['id']),
-        locator: `${node.type}.${slug}.id`,
-        expected: 'slug 跨类型唯一（§1 别名应放 aliases[]，不进 ID）',
-        actual: `${node.id} 与 ${prevSlug.id}（${prevSlug.file}:${prevSlug.line}）重名`,
-      });
-    }
   }
 
   // ---- V3：边的 from/to 必须存在于节点库 ----
@@ -551,7 +535,7 @@ export function validate(opts: ValidateOptions): ValidateResult {
     }
   }
 
-  // ---- V8 / V9 / V9b：工具三件套 ----
+  // ---- V8 / V9 / V16：工具的 tldr 与出处（tool / ai / ecosystem） ----
   let sourceMissing = 0;
   let tldrShort = 0;
   for (const node of nodeRecords) {
@@ -573,7 +557,7 @@ export function validate(opts: ValidateOptions): ValidateResult {
       const verified = node.value['verified_at'];
       if (verified === undefined) {
         add({
-          rule: 'V9b',
+          rule: 'V16',
           level: 'error',
           file: node.file,
           line: node.lineOf(['verified_at']),
@@ -681,25 +665,22 @@ export function validate(opts: ValidateOptions): ValidateResult {
     for (const key of [...graph.keys()].sort()) visit(key);
   }
 
-  // ---- V11：非 domain 节点不得孤立 ----
-  const orphanRefCount = new Map<string, number>();
+  // ---- V11：非 domain 节点必须被引用（边或节点字段引用均算，§6） ----
+  // 载体是靠 domain/technique/tool 的 artifacts 字段被引用的，不是靠边；
+  // 所以这一条必须同时看「边度数」和「字段引用次数」，否则 19 个载体全是误报。
   for (const node of nodeRecords) {
     if (node.type === 'domain') continue;
     const deg = degree.get(node.id) ?? 0;
-    if (deg > 0) continue;
-    orphanRefCount.set(node.id, refCount.get(node.id) ?? 0);
-  }
-  for (const node of nodeRecords) {
-    const refs = orphanRefCount.get(node.id);
-    if (refs === undefined) continue;
+    const refs = refCount.get(node.id) ?? 0;
+    if (deg > 0 || refs > 0) continue;
     add({
       rule: 'V11',
       level: 'warning',
       file: node.file,
       line: node.line,
       locator: `${node.type}.${slugOf(node.id) ?? '?'}`,
-      expected: '≥1 条边相连',
-      actual: `0 条边（另有 ${refs} 处节点字段引用，不计入边）`,
+      expected: '被引用：≥1 条边，或被任意节点的字段引用（§6 V11）',
+      actual: '0 条边 · 0 处节点字段引用',
     });
   }
 
@@ -749,7 +730,7 @@ export function validate(opts: ValidateOptions): ValidateResult {
     const techs = nodeRecords.filter((n) => n.type === 'technique' && Array.isArray(n.value['domain']) && (n.value['domain'] as unknown[]).includes(node.id));
     const arts = new Set<string>();
     for (const t of [...tools, ...techs]) {
-      const list = (t.value['artifacts'] ?? t.value['typical_artifacts']) as unknown;
+      const list = t.value['artifacts'];
       if (Array.isArray(list)) for (const a of list) if (typeof a === 'string') arts.add(a);
     }
     domainStats.push({
@@ -819,6 +800,21 @@ export function validate(opts: ValidateOptions): ValidateResult {
     }
   }
 
+  // ---- V17：§6.2 废弃字段（typical_artifacts 出现即 error） ----
+  // 规范没给编号（V 表止于 V16），这里补 V17，并在 scripts/README.md 登记。
+  for (const node of nodeRecords) {
+    if (!('typical_artifacts' in node.value)) continue;
+    add({
+      rule: 'V17',
+      level: 'error',
+      file: node.file,
+      line: node.lineOf(['typical_artifacts']),
+      locator: `${node.type}.${slugOf(node.id) ?? '?'}.typical_artifacts`,
+      expected: '不含已废弃字段（§6.2：统一用 artifacts，矩阵轴只认 artifacts）',
+      actual: formatValue(node.value['typical_artifacts']),
+    });
+  }
+
   // ---- EXT-REF：节点字段里的 ID 引用必须已定义 ----
   if (useExt) {
     for (const { node, path, ref } of dangling) {
@@ -834,25 +830,30 @@ export function validate(opts: ValidateOptions): ValidateResult {
     }
   }
 
-  // ---- EXT-LEN：§2.1 / §2.5 的字数上限 ----
+  // ---- EXT-LEN：§2.1 / §2.2 / §2.5 的字数上限 ----
   if (useExt) {
     for (const node of nodeRecords) {
       const slug = slugOf(node.id) ?? '?';
       const name = node.value['name'];
       const def = node.value['def'];
-      const limits: { field: string; max: number; value: unknown }[] =
+      const limits: { field: string; max: number; section: string; value: unknown }[] =
         node.type === 'domain'
           ? [
-              { field: 'name', max: 16, value: name },
-              { field: 'def', max: 120, value: def },
+              { field: 'name', max: 16, section: '2.1', value: name },
+              { field: 'def', max: 120, section: '2.1', value: def },
             ]
-          : node.type === 'artifact'
+          : node.type === 'technique'
             ? [
-                { field: 'name', max: 20, value: name },
-                { field: 'def', max: 120, value: def },
+                { field: 'name', max: 16, section: '2.2', value: name },
+                { field: 'def', max: 120, section: '2.2', value: def },
               ]
-            : [];
-      for (const { field, max, value } of limits) {
+            : node.type === 'artifact'
+              ? [
+                  { field: 'name', max: 20, section: '2.5', value: name },
+                  { field: 'def', max: 120, section: '2.5', value: def },
+                ]
+              : [];
+      for (const { field, max, section, value } of limits) {
         if (typeof value !== 'string') continue;
         const n = charCount(value);
         if (n <= max) continue;
@@ -862,7 +863,7 @@ export function validate(opts: ValidateOptions): ValidateResult {
           file: node.file,
           line: node.lineOf([field]),
           locator: `${node.type}.${slug}.${field}`,
-          expected: `≤${max} 字（§${node.type === 'domain' ? '2.1' : '2.5'}）`,
+          expected: `≤${max} 字（§${section}）`,
           actual: `${n} 字`,
         });
       }

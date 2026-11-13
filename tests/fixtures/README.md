@@ -9,5 +9,6 @@
 | `edge-dangling-from/` | 边的 `from` 指向不存在的节点 | V3 |
 | `tool-missing-required/` | `tool` 缺 `license` 与 `platforms` | V1 |
 | `line-precision/` | `coverage: fullish`（非法枚举，位于第 9 行） | V1（验证行号精确） |
+| `deprecated-field/` | 同时写了 `artifacts` 与已废弃的 `typical_artifacts` | V17 |
 
 每个夹具都是独立的 `data/` 根目录，用 `pnpm validate --data tests/fixtures/<目录>/data` 单独跑。

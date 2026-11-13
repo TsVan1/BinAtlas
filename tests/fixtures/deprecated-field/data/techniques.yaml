@@ -1,0 +1,33 @@
+# 坏样例 5：混进已废弃字段 typical_artifacts（§6.2 规定出现即 error）
+# 注意：这条同时写了正确的 artifacts，所以只会被 V17 抓住，不会被 V1 连带报缺字段
+- id: tech:alpha
+  name: 示例技术甲
+  name_en: Alpha Technique
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites:
+  - tech:stale
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出甲
+  cost: low
+  false_positive_risk: low
+- id: tech:stale
+  name: 半迁移技术
+  name_en: Stale Technique
+  domain:
+  - dom:fixture
+  def: 这条技术还留着早期字段名 typical_artifacts，用来验证废弃字段检测。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  typical_artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出乙
+  cost: low
+  false_positive_risk: low

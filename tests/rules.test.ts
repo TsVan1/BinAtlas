@@ -14,7 +14,7 @@ import { validate, type ValidateResult } from '../scripts/lib/validate.js';
 
 const TODAY = new Date('2026-11-13T00:00:00Z');
 
-/** 故意把 V4(字数) / V5 / V6 / V7 / V8 / V9 / V9b / V10 / V12 / V13 / V15 全部踩一遍 */
+/** 故意把 V4(字数) / V5 / V6 / V7 / V8 / V9 / V16 / V10 / V12 / V13 / V15 全部踩一遍 */
 const FILES: Record<string, string> = {
   'domains.yaml': `# 规则覆盖测试：1 个领域（coverage=partial，避免触发 EXT-COVERAGE）
 - id: dom:fixture
@@ -85,7 +85,7 @@ const FILES: Record<string, string> = {
   ai_ready: none
   tldr: 太短
 `,
-  // V9 source 缺失 / V9b verified_at 缺失 / V13 打上 unverified
+  // V9 source 缺失 / V16 verified_at 缺失 / V13 打上 unverified
   'ai.yaml': `- id: ai:fixture-mcp
   name: 夹具 MCP
   kind: mcp
@@ -94,7 +94,7 @@ const FILES: Record<string, string> = {
   url: https://example.com/mcp
   unverified: true
 `,
-  // V9b verified_at 缺失（source 给了）/ V13 打上 unverified
+  // V16 verified_at 缺失（source 给了）/ V13 打上 unverified
   'ecosystems.yaml': `- id: eco:fixture-lab
   name: 夹具靶场
   kind: 靶场
@@ -151,7 +151,7 @@ function countByRule(result: ValidateResult): Record<string, number> {
   return out;
 }
 
-test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V9b/V10/V15，并让 V12/V13 报 warning', (t) => {
+test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V16/V10/V15，并让 V12/V13 报 warning', (t) => {
   const dataDir = buildTortureApp();
   t.after(() => rmSync(path.dirname(dataDir), { recursive: true, force: true }));
 
@@ -168,7 +168,7 @@ test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V9b/V10/V15，并让
       V7: 1,
       V8: 1,
       V9: 2,
-      V9b: 2,
+      V16: 2,
       V10: 1,
       V12: 1,
       V13: 1,
@@ -240,6 +240,7 @@ const DUP_FILES: Record<string, string> = {
   - dom:dup
   def: 类型是 technique，但 ID 前缀写成 tool 的技术。
   difficulty: 1
+  prerequisites: []
   artifacts:
   - art:dup
   outputs:
@@ -249,7 +250,7 @@ const DUP_FILES: Record<string, string> = {
 `,
 };
 
-test('V2：重复 ID / 前缀与类型不符 / slug 跨类型重名', (t) => {
+test('V2：重复 ID / 前缀与类型不符；slug 跨类型重复不再算错（§1 改判）', (t) => {
   const root = mkdtempSync(path.join(tmpdir(), 'binatlas-ids-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const dataDir = path.join(root, 'data');
@@ -259,9 +260,12 @@ test('V2：重复 ID / 前缀与类型不符 / slug 跨类型重名', (t) => {
   }
 
   const result = validate({ dataDir, cwd: root, today: TODAY });
+  const errorsText = result.errors.map(formatFinding).join('\n');
   const v2 = result.errors.filter((e) => e.rule === 'V2');
-  assert.equal(v2.length, 3, result.errors.map(formatFinding).join('\n'));
+  assert.equal(v2.length, 2, errorsText);
   assert.ok(v2.some((e) => /与 data\/domains\.yaml:1 重复/.test(e.actual)), '应报重复 ID');
   assert.ok(v2.some((e) => e.locator === 'technique.wrong-prefix.id' && /前缀必须是 tech:/.test(e.expected)), '应报前缀与类型不符');
-  assert.ok(v2.some((e) => /dom:dup 与 art:dup/.test(e.actual)), '应报 slug 跨类型重名');
+  // §1 改判：slug 允许跨类型重复（tool:upx 与 art:upx 因前缀不同无歧义），不再算错
+  assert.ok(!v2.some((e) => /slug/.test(e.expected)), `slug 跨类型重复不再算错：\n${errorsText}`);
+  assert.ok(!errorsText.includes('art:dup'), `art:dup 不应被任何规则报错：\n${errorsText}`);
 });

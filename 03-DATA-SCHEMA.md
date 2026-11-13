@@ -447,6 +447,7 @@ _history:                   # 字段级变更历史（compact 时导出到 _audi
 | V14 | 某 `domain` 工具数 < 5 | warning（并在 stats 报告中标 partial） |
 | V15 | `first_release` 晚于 `verified_at` 年份 | error |
 | V16 | `tool` / `ai` / `ecosystem` 缺 `verified_at` | error |
+| V17 | 出现已废弃字段 `typical_artifacts`（统一用 `artifacts`） | error |
 
 **校验器输出必须可定位**：`data/tools/packers.yaml:42 · tool.upx.source · 期望非空 · 实际 null`
 
@@ -479,7 +480,7 @@ V13 的分母是**全库节点总数**，阈值 15%。
 | `data/_audit/*.jsonl` | 审计日志 | 下划线前缀 → **校验器跳过**，不参与校验 |
 
 > **矩阵轴的唯一数据源是 `artifacts` 字段**（`tool` / `technique` / `domain` 同名同义）。
-> 早期设计用过 `typical_artifacts`，已废弃，出现即为 error。
+> 早期设计用过 `typical_artifacts`，已废弃；由 **V17** 拦截，出现即 error。
 
 ---
 

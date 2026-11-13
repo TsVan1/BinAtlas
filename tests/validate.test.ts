@@ -55,8 +55,19 @@ test('真实 data/：0 个 error（warning 不阻断）', () => {
   assert.equal(result.stats.nodeCount, 37, '当前应为 3 领域 + 15 技术 + 19 载体');
   assert.equal(result.stats.edgeCount, 0, 'data/edges 目前为空');
   assert.equal(before, after, '校验器不许修改 data/ 下任何文件');
-  // V11 应当就「还没写边」这件事报警，而不是沉默
-  assert.ok(result.warnings.some((w) => w.rule === 'V11'), '应出现 V11 孤立节点警告');
+  // V11 新语义（§6）：载体靠 artifacts 字段被引用即算关联，19 个载体不应再被判孤立
+  const v11 = result.warnings.filter((w) => w.rule === 'V11');
+  assert.equal(
+    v11.filter((w) => w.locator.startsWith('artifact.')).length,
+    0,
+    `载体不应再被判孤立（它们被 artifacts 字段引用）：\n${v11.map(formatFinding).join('\n')}`,
+  );
+  assert.equal(
+    v11.length,
+    9,
+    `当前只剩 9 条「技术孤立」：全库没有任何节点的字段整串引用它们，等 A3 的边来连。实际：\n${v11.map(formatFinding).join('\n')}`,
+  );
+  assert.equal(result.warnings.length, 12, '12 = V11×9 + V14×3');
   assert.ok(result.warnings.some((w) => w.rule === 'V14'), '应出现 V14 领域工具数不足警告');
 });
 
@@ -121,6 +132,22 @@ test('行号精度：非法枚举值指到第 9 行，而不是文件头', () =>
 });
 
 // ---------------------------------------------------------------------------
+// 坏样例 5：已废弃字段 typical_artifacts（§6.2 出现即 error）
+// ---------------------------------------------------------------------------
+
+test('坏样例 5：出现已废弃字段 typical_artifacts → V17', () => {
+  const result = run(fixtureData('deprecated-field'));
+  assert.equal(result.errors.length, 1, result.errors.map(formatFinding).join('\n'));
+  const [err] = result.errors;
+  assert.ok(err);
+  assert.equal(err.rule, 'V17');
+  assert.equal(err.line, 28, '应指到 typical_artifacts 那一行，而不是节点起始行');
+  assert.equal(err.locator, 'technique.stale.typical_artifacts');
+  assert.match(formatFinding(err), /data\/techniques\.yaml:28 · technique\.stale\.typical_artifacts · 期望不含已废弃字段（§6\.2/);
+  assert.match(err.actual, /art:fixture-obj/);
+});
+
+// ---------------------------------------------------------------------------
 // CLI：退出码与参数
 // ---------------------------------------------------------------------------
 
@@ -133,7 +160,7 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 test('CLI：坏数据 exit 1，真实数据 exit 0', () => {
-  for (const name of ['edge-missing-rationale', 'edge-dangling-from', 'tool-missing-required', 'line-precision']) {
+  for (const name of ['edge-missing-rationale', 'edge-dangling-from', 'tool-missing-required', 'line-precision', 'deprecated-field']) {
     const res = runCli(['--data', path.join('tests/fixtures', name, 'data')]);
     assert.equal(res.status, 1, `${name} 应 exit 1\n${res.stdout}${res.stderr}`);
     assert.match(res.stdout, /✗ 错误 [12]/, `${name} 应打印错误清单`);
@@ -143,7 +170,7 @@ test('CLI：坏数据 exit 1，真实数据 exit 0', () => {
   assert.match(good.stdout, /结论 通过/);
 });
 
-test('CLI：--no-ext 只跑 V1–V15，不改变已通过的数据结论', () => {
+test('CLI：--no-ext 只跑 V1–V17，不改变已通过的数据结论', () => {
   const res = runCli(['--data', 'data', '--no-ext', '--all-warnings']);
   assert.equal(res.status, 0);
   assert.doesNotMatch(res.stdout, /\[EXT-/);
