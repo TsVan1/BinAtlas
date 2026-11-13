@@ -460,6 +460,10 @@ _history:                   # 字段级变更历史（compact 时导出到 _audi
 | V15 | `first_release` 晚于 `verified_at` 年份 | error |
 | V16 | `tool` / `ai` / `ecosystem` 缺 `verified_at` | error |
 | V17 | 出现已废弃字段 `typical_artifacts`（统一用 `artifacts`） | error |
+| V18 | `detail` 存在时，去空白后 ≤400 字 | error |
+| V19 | `principle` 存在时，去空白后 ≤300 字 | error |
+| V20 | `procedure` 存在时，条数在 3–8 之间，且每项非空、不重复 | error |
+| V21 | `technique` 缺 `detail` / `principle` / `procedure` 任一 | warning（逐步收紧为 error） |
 
 **校验器输出必须可定位**：`data/tools/packers.yaml:42 · tool.upx.source · 期望非空 · 实际 null`
 
