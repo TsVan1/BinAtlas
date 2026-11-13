@@ -4,11 +4,11 @@
 
 | 命令 | 现状 | 说明 |
 | --- | --- | --- |
-| `pnpm validate` | ✅ 已实现 | V1–V17 + 4 条 `EXT-*`；任何 error → exit 1 |
+| `pnpm validate` | ✅ 已实现 | V1–V21 + 4 条 `EXT-*`；任何 error → exit 1 |
 | `pnpm build` | ✅ 已实现 | **CI 入口**：类型检查 → 数据校验（同一套 Zod）→ 图数据 4 份 JSON；全部成功才 exit 0 |
 | `pnpm build:graph` | ✅ 已实现 | 只跑图数据构建：`data/**/*.yaml` → `public/graph/{nodes,edges,index,meta}.json` |
 | `pnpm stats` | ✅ 已实现 | 覆盖率报告：`reports/coverage.json`（机器读）+ `reports/coverage.md`（人读） |
-| `pnpm test` | ✅ 已实现 | 18 个用例：真实数据 / 5 个坏夹具 / 规则冷门分支 / CLI 退出码 / 只读证明 / 图数据契约 / 空数据 / 统计 NaN |
+| `pnpm test` | ✅ 已实现 | 23 个用例：真实数据 / 9 个坏夹具 / 规则冷门分支 / CLI 退出码 / 只读证明 / 图数据契约 / 空数据 / 统计 NaN |
 | `pnpm typecheck` | ✅ 已实现 | `tsc --noEmit`，覆盖 `schema/ scripts/ tests/` |
 
 ## build 用法（CI 用这一条）
@@ -84,7 +84,7 @@ pnpm stats --out /tmp/reports     # 换输出目录
 pnpm validate                                  # 校验 ./data
 pnpm validate --data tests/fixtures/xxx/data    # 校验任意目录（夹具用）
 pnpm validate --all-warnings                   # 警告不再按规则截断
-pnpm validate --no-ext                         # 只跑 V1–V17，关掉 EXT-*
+pnpm validate --no-ext                         # 只跑 V1–V21，关掉 EXT-*
 pnpm validate --downgrade V17,V12              # 把指定规则的 error 降级为 warning（应急）
 pnpm validate --today 2030-01-01               # 覆盖 V12 的「今天」
 ```
@@ -121,7 +121,11 @@ pnpm validate --today 2030-01-01               # 覆盖 V12 的「今天」
 | V13 | warning | `unverified: true` 占全部节点比例 > 15% |
 | V14 | warning | 某 `domain` 的工具数 < 5，并输出覆盖度表 |
 | V15 | error | `first_release` 晚于 `verified_at` 的年份 |
-| V17 | error | 出现已废弃字段 `typical_artifacts`（§6.2：矩阵轴只认 `artifacts`）。**规范说「出现即为 error」但没给编号，这里补 V17** |
+| V17 | error | 出现已废弃字段 `typical_artifacts`（§6.2：矩阵轴只认 `artifacts`） |
+| V18 | error | `detail` 存在时去空白后 ≤400 字（`charCount` 口径：中文标点算 1 字，§6.1①）。非字符串也报，避免类型错绕过长度检查 |
+| V19 | error | `principle` 存在时去空白后 ≤300 字；**恰好 300 字必须通过**（用 `>` 判超限，不是 `>=`） |
+| V20 | error | `procedure` 存在时必须是数组、3–8 项；每项非空字符串；同一节点内 **trim 后整串相同**即重复。条数、空项、重复项各出一条 finding，定位到 `procedure[i]` |
+| V21 | warning | 只检查 `technique`：缺 `detail` / `principle` / `procedure` 任一即报（一条技术只报一条，actual 列全缺口）。`domain` / `tool` / `artifact` 不要求这三个字段。空串 / 空数组视为「没写」 |
 
 ## EXT-*（规范未覆盖、校验器额外做的检查，可用 `--no-ext` 全部关闭）
 
@@ -149,7 +153,7 @@ pnpm validate --today 2030-01-01               # 覆盖 V12 的「今天」
 
 ## 加测试
 
-- `tests/validate.test.ts` —— 对 5 个坏夹具断言具体规则、行号、字段路径、退出码；真实数据只断言**结构性不变量**（0 error / 只读 / 统计自洽），不写死条数 —— `data/` 由 A1/A2/A3 并行扩写，写死 37 这类数字会让 CI 每逢数据提交就红
+- `tests/validate.test.ts` —— 对 9 个坏夹具断言具体规则、行号、字段路径、退出码；真实数据只断言**结构性不变量**（0 error / 只读 / 统计自洽），不写死条数 —— `data/` 由 A1/A2/A3 并行扩写，写死 37 这类数字会让 CI 每逢数据提交就红。V21 例外：真实数据允许出现 V21（`data/techniques.yaml` 的 5 条 P-1 试点技术尚未补三个字段），但断言它只落在 `technique` 上
 - `tests/rules.test.ts` —— 在 `os.tmpdir()` 造一棵临时 `data/`，一次性触发 V2/V4–V16 的冷门分支；跑完即删
 - `tests/build.test.ts` —— 图数据 4 份产物的契约（字段齐、条数自洽、摘要 ≤80 字、id 唯一、tool.def 回落）、空数据不崩、统计不产生 NaN、坏数据 exit 1 且不留产物
 - `tests/fixtures/` —— 故意坏掉的样例，见其中的 README

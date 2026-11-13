@@ -1,0 +1,5 @@
+# 坏样例 V20：最小合法载体
+- id: art:fixture-obj
+  name: 示例载体
+  kind: executable
+  def: 校验器测试用的最小载体条目，仅保证必填字段齐全。

@@ -1,0 +1,81 @@
+# 坏样例 V20：procedure 三条分支各踩一次（条数不足 / 空项 / 重复项）
+- id: tech:few-steps
+  name: 步骤过少技术
+  name_en: Few Steps
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出
+  cost: low
+  false_positive_risk: low
+  detail: 详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详
+  principle: 原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原
+  procedure:
+  - 第一步先确认样本边界
+  - 第二步记录关键字段
+- id: tech:empty-step
+  name: 空步骤技术
+  name_en: Empty Step
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出
+  cost: low
+  false_positive_risk: low
+  detail: 详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详
+  principle: 原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原
+  procedure:
+  - 第一步先确认样本边界
+  - "   "
+  - 第三步复核结论
+- id: tech:duplicate-step
+  name: 重复步骤技术
+  name_en: Duplicate Step
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出
+  cost: low
+  false_positive_risk: low
+  detail: 详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详
+  principle: 原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原
+  procedure:
+  - 先备份样本
+  - 第二步记录关键字段
+  - 第三步复核结论
+  - 先备份样本
+- id: tech:similar-steps
+  name: 相似步骤技术
+  name_en: Similar Steps
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出
+  cost: low
+  false_positive_risk: low
+  detail: 详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详详
+  principle: 原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原原
+  procedure:
+  - 备份到 A
+  - 备份到 A 并校验
+  - 复核备份结果

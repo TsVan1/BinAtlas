@@ -1,0 +1,15 @@
+# 坏样例 V21：technique 缺 detail / principle / procedure 三个字段（warning，不阻断）
+- id: tech:pilot-gap
+  name: 缺字段技术
+  name_en: Pilot Gap
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出
+  cost: low
+  false_positive_risk: low

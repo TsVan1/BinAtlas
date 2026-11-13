@@ -45,7 +45,7 @@ export function renderReport(result: ValidateResult, opts: RenderOptions): strin
 
   out.push(`BinAtlas 数据校验 · ${opts.dataLabel}`);
   out.push(
-    `文件 ${result.files.length} 个 · 节点 ${stats.nodeCount} 个 · 边 ${stats.edgeCount} 条 · 规则 V1–V17${result.findings.some((f) => f.rule.startsWith('EXT-')) ? ' + EXT-*' : ''}`,
+    `文件 ${result.files.length} 个 · 节点 ${stats.nodeCount} 个 · 边 ${stats.edgeCount} 条 · 规则 V1–V21${result.findings.some((f) => f.rule.startsWith('EXT-')) ? ' + EXT-*' : ''}`,
   );
   out.push('');
 

@@ -1,5 +1,5 @@
 /**
- * 规则覆盖测试：V1–V15 里那些「真实数据暂时证明不了」的规则，
+ * 规则覆盖测试：V1–V21 里那些「真实数据暂时证明不了」的规则，
  * 用一个临时 data/ 根目录一次性触发。
  *
  * 临时目录建在 os.tmpdir() 下，跑完即删 —— 不污染仓库、更不碰 data/。
@@ -151,7 +151,7 @@ function countByRule(result: ValidateResult): Record<string, number> {
   return out;
 }
 
-test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V16/V10/V15，并让 V12/V13 报 warning', (t) => {
+test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V16/V10/V15，并让 V12/V13/V21 报 warning', (t) => {
   const dataDir = buildTortureApp();
   t.after(() => rmSync(path.dirname(dataDir), { recursive: true, force: true }));
 
@@ -175,6 +175,7 @@ test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V16/V10/V15，并让
       V15: 1,
       V11: 2, // ai、eco 没有任何边（warning）
       V14: 1, // 该领域只有 1 个工具（warning）
+      V21: 2, // 两条最小技术都没写 detail/principle/procedure（warning）
     },
     `规则命中数与预期不符：\n${errorsText}`,
   );
@@ -182,8 +183,8 @@ test('规则覆盖：一次触发 V4(字数)/V5/V6/V7/V8/V9/V16/V10/V15，并让
   assert.equal(result.errors.length, 13, `error 数不符：\n${errorsText}`);
   assert.equal(
     result.warnings.length,
-    5,
-    `warning 应为 V11×2 + V12 + V13 + V14：\n${result.warnings.map(formatFinding).join('\n')}`,
+    7,
+    `warning 应为 V11×2 + V12 + V13 + V14 + V21×2：\n${result.warnings.map(formatFinding).join('\n')}`,
   );
 
   // V4 的字数分支要给出实际字数，而不是只说「太短」

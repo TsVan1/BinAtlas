@@ -1,5 +1,5 @@
 /**
- * 校验器测试：真实 data/ + 4 个故意坏掉的夹具 + CLI 退出码。
+ * 校验器测试：真实 data/ + 9 个故意坏掉的夹具 + CLI 退出码。
  *
  * 只读 data/ —— 这里还会断言校验过程不会改动 data/ 下任何字节。
  */
@@ -71,10 +71,18 @@ test('真实 data/：0 个 error，且统计口径自洽（不写死条数——
   );
 
   // 真实数据只可能触发这四条警告规则；出现别的规则说明规则实现串了
-  const allowedWarnings = new Set(['V11', 'V12', 'V13', 'V14']);
+  // V21 例外：data/techniques.yaml 还有 5 条 P-1 试点技术没补 detail/principle/procedure，
+  // 按规则就该报 warning（由 A1 另行补齐，不是校验器该压掉的东西）。
+  const allowedWarnings = new Set(['V11', 'V12', 'V13', 'V14', 'V21']);
   for (const w of result.warnings) {
     assert.ok(allowedWarnings.has(w.rule), `真实 data/ 出现了非预期警告：${formatFinding(w)}`);
   }
+  // V21 只约束 technique：domain / tool / artifact 缺这三个字段是合法的
+  const v21 = result.warnings.filter((w) => w.rule === 'V21');
+  assert.ok(
+    v21.every((w) => w.locator.startsWith('technique.')),
+    `V21 只应落在 technique 上，实际：\n${v21.map(formatFinding).join('\n')}`,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -154,6 +162,101 @@ test('坏样例 5：出现已废弃字段 typical_artifacts → V17', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 坏样例 6：detail 超过 400 字（V18）
+// ---------------------------------------------------------------------------
+
+test('坏样例 6：detail 401 字 → V18，报出实际字数与字段路径', () => {
+  const result = run(fixtureData('detail-too-long'));
+  assert.equal(result.errors.length, 1, result.errors.map(formatFinding).join('\n'));
+  const [err] = result.errors;
+  assert.ok(err);
+  assert.equal(err.rule, 'V18');
+  assert.equal(err.level, 'error');
+  assert.equal(err.line, 16, '应指到 detail 那一行');
+  assert.equal(err.locator, 'technique.detail-too-long.detail');
+  assert.match(
+    formatFinding(err),
+    /tests\/fixtures\/detail-too-long\/data\/techniques\.yaml:16 · technique\.detail-too-long\.detail · 期望≤400 字（去空白后的码点数，§6\.1①） · 实际 401 字/,
+  );
+  // 边界：同目录里 detail 正好 400 字的技术必须通过（`>` 而不是 `>=`）
+  assert.ok(
+    !result.findings.some((f) => f.rule === 'V18' && f.locator === 'technique.detail-at-limit.detail'),
+    `恰好 400 字的 detail 不应触发 V18：\n${result.findings.map(formatFinding).join('\n')}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 坏样例 7：principle 超过 300 字（V19）
+// ---------------------------------------------------------------------------
+
+test('坏样例 7：principle 301 字 → V19；300 字边界必须通过', () => {
+  const result = run(fixtureData('principle-too-long'));
+  assert.equal(result.errors.length, 1, result.errors.map(formatFinding).join('\n'));
+  const [err] = result.errors;
+  assert.ok(err);
+  assert.equal(err.rule, 'V19');
+  assert.equal(err.level, 'error');
+  assert.equal(err.line, 17, '应指到 principle 那一行');
+  assert.equal(err.locator, 'technique.principle-too-long.principle');
+  assert.match(
+    formatFinding(err),
+    /tests\/fixtures\/principle-too-long\/data\/techniques\.yaml:17 · technique\.principle-too-long\.principle · 期望≤300 字（去空白后的码点数，§6\.1①） · 实际 301 字/,
+  );
+
+  // 边界：真实数据里有正好 300 字的 principle，必须不报错（`<=` 而不是 `<`）
+  const real = run(path.join(ROOT, 'data'));
+  assert.ok(
+    !real.findings.some((f) => f.rule === 'V19'),
+    `恰好 300 字的 principle 不应触发 V19：\n${real.findings.filter((f) => f.rule === 'V19').map(formatFinding).join('\n')}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 坏样例 8：procedure 三条分支（V20）
+// ---------------------------------------------------------------------------
+
+test('坏样例 8：procedure 条数不足 / 空项 / 重复项 → 三条 V20', () => {
+  const result = run(fixtureData('procedure-bad'));
+  const errs = result.errors.filter((e) => e.rule === 'V20');
+  assert.equal(result.errors.length, 3, result.errors.map(formatFinding).join('\n'));
+  assert.deepEqual(
+    errs.map((e) => e.locator),
+    ['technique.few-steps.procedure', 'technique.empty-step.procedure[1]', 'technique.duplicate-step.procedure[3]'],
+    result.errors.map(formatFinding).join('\n'),
+  );
+
+  const [few, empty, dup] = errs;
+  assert.match(formatFinding(few!), /data\/techniques\.yaml:18 · technique\.few-steps\.procedure · 期望3–8 项 · 实际 2 项/);
+  assert.match(formatFinding(empty!), /procedure\[1\] · 期望非空字符串（每项一句话） · 实际 " {3}"（全是空白）/);
+  assert.match(formatFinding(dup!), /procedure\[3\] · 期望同一 procedure 内不重复 · 实际 与第 1 项重复："先备份样本"/);
+  // 相似但不相同的步骤不算重复（不做模糊匹配）：备份到 A / 备份到 A 并校验
+  assert.ok(
+    !result.findings.some((f) => f.rule === 'V20' && f.locator.startsWith('technique.similar-steps')),
+    `相似步骤不应被判重复：\n${result.findings.map(formatFinding).join('\n')}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 坏样例 9：technique 缺 detail / principle / procedure（V21，warning）
+// ---------------------------------------------------------------------------
+
+test('坏样例 9：technique 三个字段全缺 → V21 只报 warning，不阻断', () => {
+  const result = run(fixtureData('technique-missing-fields'));
+  assert.deepEqual(result.errors.map(formatFinding), [], 'V21 是 warning，不应产生 error');
+  const v21 = result.warnings.filter((w) => w.rule === 'V21');
+  assert.equal(v21.length, 1, `一条技术只报一条 V21：\n${result.warnings.map(formatFinding).join('\n')}`);
+  const [warn] = v21;
+  assert.ok(warn);
+  assert.equal(warn.level, 'warning');
+  assert.equal(warn.line, 2, '整条记录级问题退化为节点起始行');
+  assert.equal(warn.locator, 'technique.pilot-gap');
+  assert.match(
+    formatFinding(warn),
+    /techniques\.yaml:2 · technique\.pilot-gap · 期望三个字段齐全（detail \/ principle \/ procedure，§2\.2；V21 逐步收紧为 error） · 实际 缺 detail \/ principle \/ procedure/,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // CLI：退出码与参数
 // ---------------------------------------------------------------------------
 
@@ -166,17 +269,33 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 test('CLI：坏数据 exit 1，真实数据 exit 0', () => {
-  for (const name of ['edge-missing-rationale', 'edge-dangling-from', 'tool-missing-required', 'line-precision', 'deprecated-field']) {
+  for (const name of [
+    'edge-missing-rationale',
+    'edge-dangling-from',
+    'tool-missing-required',
+    'line-precision',
+    'deprecated-field',
+    'detail-too-long',
+    'principle-too-long',
+    'procedure-bad',
+  ]) {
     const res = runCli(['--data', path.join('tests/fixtures', name, 'data')]);
     assert.equal(res.status, 1, `${name} 应 exit 1\n${res.stdout}${res.stderr}`);
-    assert.match(res.stdout, /✗ 错误 [12]/, `${name} 应打印错误清单`);
+    assert.match(res.stdout, /✗ 错误 \d+/, `${name} 应打印错误清单`);
   }
   const good = runCli(['--data', 'data']);
   assert.equal(good.status, 0, `真实 data/ 应 exit 0\n${good.stdout}${good.stderr}`);
   assert.match(good.stdout, /结论 通过/);
 });
 
-test('CLI：--no-ext 只跑 V1–V17，不改变已通过的数据结论', () => {
+test('CLI：V21 只有 warning → exit 0，并打印规则分组', () => {
+  const res = runCli(['--data', path.join('tests/fixtures', 'technique-missing-fields', 'data'), '--all-warnings']);
+  assert.equal(res.status, 0, `V21 是 warning，不应阻断\n${res.stdout}${res.stderr}`);
+  assert.match(res.stdout, /\[V21\].*technique\.pilot-gap/);
+  assert.match(res.stdout, /结论 通过：0 个错误，3 个警告不阻断/);
+});
+
+test('CLI：--no-ext 只跑 V1–V21，不改变已通过的数据结论', () => {
   const res = runCli(['--data', 'data', '--no-ext', '--all-warnings']);
   assert.equal(res.status, 0);
   assert.doesNotMatch(res.stdout, /\[EXT-/);

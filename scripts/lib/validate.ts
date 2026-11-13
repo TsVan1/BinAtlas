@@ -1,5 +1,5 @@
 /**
- * 校验引擎：实现 03-DATA-SCHEMA.md §6 的 V1–V15，外加 4 条明确标注的 EXT-* 扩展检查。
+ * 校验引擎：实现 03-DATA-SCHEMA.md §6 的 V1–V21，外加 4 条明确标注的 EXT-* 扩展检查。
  *
  * 设计原则：
  * - 只报错，不改数据（AGENTS.md：`data/` 只读）。
@@ -801,7 +801,7 @@ export function validate(opts: ValidateOptions): ValidateResult {
   }
 
   // ---- V17：§6.2 废弃字段（typical_artifacts 出现即 error） ----
-  // 规范没给编号（V 表止于 V16），这里补 V17，并在 scripts/README.md 登记。
+  // 规则表（§6）登记为 V17；矩阵轴只认 artifacts。
   for (const node of nodeRecords) {
     if (!('typical_artifacts' in node.value)) continue;
     add({
@@ -812,6 +812,140 @@ export function validate(opts: ValidateOptions): ValidateResult {
       locator: `${node.type}.${slugOf(node.id) ?? '?'}.typical_artifacts`,
       expected: '不含已废弃字段（§6.2：统一用 artifacts，矩阵轴只认 artifacts）',
       actual: formatValue(node.value['typical_artifacts']),
+    });
+  }
+
+  // ---- V18 / V19：detail ≤400 字、principle ≤300 字（§2.2 / §6） ----
+  // 字数口径统一走 charCount（去空白后的 Unicode 码点数，§6.1①），标点算 1 字。
+  // 「存在」按 YAML 键存在理解；null 与缺失同义（§6.1② 没有为字符串字段定义 null）。
+  // detail / principle 不在 Zod schema 里（技术条目可选），所以类型错也要在这里兜住。
+  const TEXT_LIMITS: readonly { rule: 'V18' | 'V19'; field: 'detail' | 'principle'; max: number }[] = [
+    { rule: 'V18', field: 'detail', max: 400 },
+    { rule: 'V19', field: 'principle', max: 300 },
+  ];
+  for (const node of nodeRecords) {
+    for (const { rule, field, max } of TEXT_LIMITS) {
+      const value = node.value[field];
+      if (value === undefined || value === null) continue;
+      const locator = `${node.type}.${slugOf(node.id) ?? '?'}.${field}`;
+      if (typeof value !== 'string') {
+        add({
+          rule,
+          level: 'error',
+          file: node.file,
+          line: node.lineOf([field]),
+          locator,
+          expected: `字符串（去空白后 ≤${max} 字，§6.1①）`,
+          actual: formatValue(value),
+        });
+        continue;
+      }
+      const n = charCount(value);
+      if (n > max) {
+        add({
+          rule,
+          level: 'error',
+          file: node.file,
+          line: node.lineOf([field]),
+          locator,
+          expected: `≤${max} 字（去空白后的码点数，§6.1①）`,
+          actual: `${n} 字：${formatValue(value)}`,
+        });
+      }
+    }
+  }
+
+  // ---- V20：procedure 3–8 条、每项非空、同一节点内不重复（§2.2 / §6） ----
+  // 「重复」按 trim 后整串比较：仅缩进/首尾空格不同视为同一步，不改写内部空格与标点。
+  // 每个子问题单独出一条 finding，定位到具体项（procedure[i]），而不是只报节点级结论。
+  for (const node of nodeRecords) {
+    const value = node.value['procedure'];
+    if (value === undefined || value === null) continue;
+    const base = `${node.type}.${slugOf(node.id) ?? '?'}.procedure`;
+    const lineOf = node.lineOf;
+    if (!Array.isArray(value)) {
+      add({
+        rule: 'V20',
+        level: 'error',
+        file: node.file,
+        line: lineOf(['procedure']),
+        locator: base,
+        expected: '数组，3–8 项（每项一句话）',
+        actual: formatValue(value),
+      });
+      continue;
+    }
+    if (value.length < 3 || value.length > 8) {
+      add({
+        rule: 'V20',
+        level: 'error',
+        file: node.file,
+        line: lineOf(['procedure']),
+        locator: base,
+        expected: '3–8 项',
+        actual: `${value.length} 项`,
+      });
+    }
+    const firstSeen = new Map<string, number>();
+    value.forEach((item, i) => {
+      const locator = `${base}[${i}]`;
+      if (typeof item !== 'string' || item.trim() === '') {
+        add({
+          rule: 'V20',
+          level: 'error',
+          file: node.file,
+          line: lineOf(['procedure', i]),
+          locator,
+          expected: '非空字符串（每项一句话）',
+          actual: formatValue(item),
+        });
+        return; // 空项不参与重复判定，否则会再报一条同因的重复
+      }
+      const key = item.trim();
+      const first = firstSeen.get(key);
+      if (first === undefined) {
+        firstSeen.set(key, i);
+        return;
+      }
+      add({
+        rule: 'V20',
+        level: 'error',
+        file: node.file,
+        line: lineOf(['procedure', i]),
+        locator,
+        expected: '同一 procedure 内不重复',
+        actual: `与第 ${first + 1} 项重复：${formatValue(item)}`,
+      });
+    });
+  }
+
+  // ---- V21：technique 缺 detail / principle / procedure 任一（warning，逐步收紧） ----
+  // 只约束 technique：domain / tool / artifact 不要求这三个字段（§2.2 字段表）。
+  // 一条技术只报一条 warning（「缺任一」是节点级判定），actual 里列全缺口；
+  // 空串 / 空数组视为「没写」——否则补一个空值就能绕过这条规则的意图。
+  for (const node of nodeRecords) {
+    if (node.type !== 'technique') continue;
+    const slug = slugOf(node.id) ?? '?';
+    const missing: string[] = [];
+    for (const field of ['detail', 'principle', 'procedure'] as const) {
+      const value = node.value[field];
+      const empty =
+        value === undefined ||
+        value === null ||
+        (typeof value === 'string' && value.trim() === '') ||
+        (Array.isArray(value) && value.length === 0);
+      if (empty) missing.push(field);
+    }
+    if (missing.length === 0) continue;
+    const single = missing.length === 1;
+    add({
+      rule: 'V21',
+      level: 'warning',
+      file: node.file,
+      line: single ? node.lineOf([missing[0]!]) : node.line,
+      locator: single ? `technique.${slug}.${missing[0]}` : `technique.${slug}`,
+      expected: single ? '存在（§2.2 技术条目应写该字段；V21 逐步收紧为 error）' : '三个字段齐全（detail / principle / procedure，§2.2；V21 逐步收紧为 error）',
+      actual: single ? formatValue(node.value[missing[0]!]) : `缺 ${missing.join(' / ')}`,
     });
   }
 

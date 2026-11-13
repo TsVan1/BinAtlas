@@ -12,7 +12,7 @@
 export type Level = 'error' | 'warning';
 
 export interface Finding {
-  /** V1–V15 或 EXT-*（规范未覆盖、校验器额外加的检查） */
+  /** V1–V21 或 EXT-*（规范未覆盖、校验器额外加的检查） */
   rule: string;
   level: Level;
   /** 展示用路径：相对 cwd，便于在编辑器里点开 */
@@ -46,6 +46,10 @@ export const RULE_TITLES: Readonly<Record<string, string>> = {
   V14: 'domain 工具数 ≥5',
   V15: 'first_release 不得晚于 verified_at 年份',
   V17: '已废弃字段（typical_artifacts 出现即 error，§6.2）',
+  V18: 'detail ≤400 字（§2.2）',
+  V19: 'principle ≤300 字（§2.2）',
+  V20: 'procedure 3–8 条、非空、不重复（§2.2）',
+  V21: 'technique 缺 detail / principle / procedure（warning）',
   'EXT-REF': '节点字段里的 ID 引用必须已定义（规范未覆盖）',
   'EXT-LEN': 'name / def 字数上限（§2.1 §2.5）',
   'EXT-COVERAGE': 'coverage 取值与 §4.4 标准自相矛盾',

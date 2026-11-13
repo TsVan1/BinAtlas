@@ -1,0 +1,9 @@
+# 坏样例 V19：最小合法领域
+- id: dom:fixture
+  name: 示例领域
+  name_en: Fixture Domain
+  def: 这是校验器测试用的最小领域条目，只保证字段齐全，不代表任何真实知识。
+  artifacts:
+  - art:fixture-obj
+  entry_difficulty: 1
+  coverage: stub

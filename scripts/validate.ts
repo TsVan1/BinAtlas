@@ -25,7 +25,7 @@ const USAGE = `用法：pnpm validate [选项]
 选项
   --data <dir>        要校验的目录，默认 ./data
   --all-warnings      警告不再按规则截断，全部列出
-  --no-ext            关闭 EXT-* 扩展检查（只跑规范里的 V1–V15）
+  --no-ext            关闭 EXT-* 扩展检查（只跑规范里的 V1–V21）
   --downgrade <规则>  把指定规则（逗号分隔，如 V17,EXT-REF）的 error 降级为 warning
   --today <Y-M-D>     覆盖 V12 的判定基准日（默认今天），便于回归测试
   --help              显示本帮助
