@@ -1,0 +1,237 @@
+# BinAtlas 知识库 · 技术 · dom:ad-armsrace
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:hardware-execution-breakpoint
+  name: 硬件执行断点
+  name_en: Hardware Execution Breakpoint
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 用调试寄存器在指定地址触发执行断点，完全不改写目标代码。难点是可用槽位极少、状态按线程保存，新线程不会自动继承。
+  difficulty: 4
+  prerequisites:
+  - tech:single-step-execution
+  - tech:debug-register-clearing
+  - tech:multithread-breakpoint-sync
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 无代码改写的断点现场
+  - 每线程的断点配置
+  - 槽位占用清单
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "hbreak *$pc" -ex continue
+    note: 在当前指令地址设硬件执行断点，不向目标代码写入断点指令
+  - cmd: gdb -q -batch -p {{pid}} -ex "info breakpoints"
+    note: 确认断点类型显示为硬件断点，软件断点会暴露为内存改写
+  pitfalls:
+  - 调试器新创建的线程不会自动继承断点配置，必须在每个线程上重新设置
+  - 每个线程只有四个槽位，用完后再设观察点会被直接拒绝
+  references:
+  - https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadcontext
+- id: tech:hardware-data-watchpoint
+  name: 硬件数据观察点
+  name_en: Hardware Data Watchpoint
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 用调试寄存器监视某地址的读写，捕获数据流而不改动内存。难点是地址必须按监视宽度对齐，监视范围还被限制在很窄的字节数内。
+  difficulty: 4
+  prerequisites:
+  - tech:hardware-execution-breakpoint
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 数据读写点与访问指令
+  - 被监视变量的取值变化
+  - 访问时序
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "rwatch *(int*)$rsp" -ex continue
+    note: 硬件读观察点，任何读取该地址的指令都会停下，用于追数据来源
+  - cmd: gdb -q -batch -p {{pid}} -ex "info watchpoints"
+    note: 确认观察点状态与命中次数，区分硬件观察点与靠单步实现的软件观察点
+  pitfalls:
+  - 地址必须按监视宽度对齐，未对齐的地址在设置时就被拒绝或被静默调整
+  - 监视宽度上限随架构不同，更宽的访问要拆成多个槽位，否则会漏掉一侧读写
+- id: tech:page-guard-stepping
+  name: 页保护单步
+  name_en: Page Guard Stepping
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 把目标页设为保护页或不可访问，靠访问异常实现近似单步，不写任何断点字节。难点是粒度是整页，且保护位触发后必须每次重设。
+  difficulty: 4
+  prerequisites:
+  - tech:hardware-data-watchpoint
+  - tech:breakpoint-integrity-bypass
+  - tech:exception-chain-takeover
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 页粒度的访问轨迹
+  - 无需改写的单步序列
+  - 保护位重设记录
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: strace -f -e trace=mprotect -p {{pid}}
+    note: 观察目标自身的页保护调用，确认保护位被谁、在何时重设
+  - cmd: grep -E "^(---p|rw-p)" /proc/{{pid}}/maps
+    note: 找出权限被改成不可访问的区间，那就是保护页所在的范围
+  pitfalls:
+  - 保护粒度是整页，相邻数据也会触发异常，事件量会远超实际目标点
+  - 保护位触发一次后被硬件清除，忘记重设会让后续访问完全不被捕获
+  references:
+  - https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualprotect
+- id: tech:hypervisor-introspection
+  name: 虚拟机外部观察
+  name_en: Hypervisor-Level Introspection
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 把断点与内存读取放到虚拟机监控层，目标内存与页表完全不被改动。难点是外部视角拿不到进程内语义，符号与结构都要自己还原。
+  difficulty: 5
+  prerequisites:
+  - tech:page-guard-stepping
+  - tech:kernel-dual-machine-debugging
+  - tech:time-source-hooking
+  artifacts:
+  - art:memory-dump
+  - art:driver
+  - art:elf64
+  outputs:
+  - 目标机内部无改写的断点现场
+  - 外部视角的内存快照
+  - 虚拟机监控层可观测范围
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: qemu-system-x86_64 -s -S -kernel {{binary}}
+    note: 以冻结方式启动并开放调试桩，启动后 CPU 停在第一条指令之前
+  - cmd: gdb {{binary}} -ex "target remote :1234"
+    note: 连到调试桩，所有断点都停在监控层，目标内存里不出现断点字节
+  pitfalls:
+  - 外部观察只能看到物理内存与寄存器，进程语义要靠自己重建，工作量常被低估
+  - 目标侧可检测虚拟化痕迹（特性位与计时偏差），外部观察并不能做到完全隐身
+- id: tech:kernel-callback-observation
+  name: 内核回调与事件追踪
+  name_en: Kernel Callback and Event Tracing
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 用驱动回调或系统事件追踪设施观察进程与模块活动，不修改目标任何字节。难点是回调只在特定事件点触发，拿不到指令级细节。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-driver-load-breakpoints
+  - tech:kernel-dual-machine-debugging
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 进程与模块事件时间线
+  - 加载链与调用方
+  - 无内存改写的观察证据
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: wpr -start GeneralProfile -filemode
+    note: 启动系统级事件追踪，进程、模块与文件活动都会被记录
+  - cmd: xperf -on PROC_THREAD+LOADER -f trace.etl
+    note: 只开进程与加载器事件，数据量小，便于看模块加载时序
+  pitfalls:
+  - 回调只能看到事件发生，看不到事件内部的参数与分支，定位到函数级就断了
+  - 事件追踪的缓冲区会覆盖旧数据，长时间采集必须在合适时机停止并保存
+- id: tech:ebpf-uprobe-tracing
+  name: 内核探针无侵入追踪
+  name_en: eBPF uprobe Tracing
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 在内核侧挂用户态或内核函数探针收集参数与调用，不在目标进程里留调试器。难点是探针实现方式决定可被发现的程度，且拿不到完整控制流。
+  difficulty: 4
+  prerequisites:
+  - tech:linux-kernel-dynamic-tracing
+  - tech:kernel-callback-observation
+  artifacts:
+  - art:elf64
+  - art:so
+  outputs:
+  - 函数级调用与参数记录
+  - 进程外部的观察证据
+  - 探针自身的可见性评估
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: bpftrace -l "uprobe:{{binary}}:*"
+    note: 列出目标文件里可挂的用户态探针点，先确认符号与偏移可用
+  - cmd: bpftrace -e "uprobe:{{binary}}:main { printf(\"hit\\n\"); }"
+    note: 在目标函数入口挂探针，命中即打印，不需要把调试器附加到目标进程
+  pitfalls:
+  - 基于断点指令实现的探针仍会改写目标代码，完整性校验能发现；只有走函数入口跳板的实现才不写断点
+  - 内核侧探针看不到用户态的控制流细节，分支与循环信息需要另配硬件跟踪
+- id: tech:intel-pt-branch-tracing
+  name: 处理器分支跟踪
+  name_en: Processor Branch Tracing
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 用处理器的分支记录能力离线还原执行路径，全程不写目标内存也不停住进程。难点是只有控制流没有数据，缓冲区溢出还会丢段。
+  difficulty: 5
+  prerequisites:
+  - tech:hardware-data-watchpoint
+  artifacts:
+  - art:elf64
+  - art:pe64
+  outputs:
+  - 执行路径与分支序列
+  - 热点与异常跳转点
+  - 无停顿的观察证据
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: perf record -e intel_pt//u -o pt.data -- {{binary}}
+    note: 采集用户态分支跟踪数据，需要处理器与内核都支持该事件源
+  - cmd: perf script --itrace=b -i pt.data | head -50
+    note: 解析分支记录，确认解码出的执行路径与静态反汇编能对上
+  pitfalls:
+  - 分支记录不含数据值，判断条件是否成立仍需寄存器或内存信息配合
+  - 缓冲区不足时旧记录会被覆盖，长路径分析必须先估算事件量
+- id: tech:remote-channel-isolation
+  name: 远程调试通道隔离
+  name_en: Remote Debug Channel Isolation
+  domain:
+  - dom:ad-armsrace
+  parent: dom:ad-armsrace
+  def: 把调试器与目标分到不同主机，通过调试通道而非进程内组件完成观察。难点是用户态断点仍落在目标内存，真正无痕只能靠硬件与虚拟化手段。
+  difficulty: 5
+  prerequisites:
+  - tech:hypervisor-introspection
+  - tech:module-handle-hiding
+  - tech:kernel-dual-machine-debugging
+  - tech:ptrace-interception
+  - tech:intel-pt-branch-tracing
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  outputs:
+  - 目标机上的调试器足迹清单
+  - 通道配置与带宽评估
+  - 剩余可检测面
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: gdbserver --attach :1234 {{pid}}
+    note: 让目标进程由独立进程接管并通过网络暴露调试通道，目标机内仍需服务进程
+  - cmd: windbg -k net:port=50001,key=1.2.3.4
+    note: 内核通道完全在目标机之外，宿主机只通过调试协议与目标交互
+  pitfalls:
+  - 远程通道只是把调试器界面移走，服务端进程与断点字节仍留在目标机上，痕迹并未归零
+  - 网络调试在高负载下丢包会导致断点命中丢失，关键路径应改用串口这类可靠通道

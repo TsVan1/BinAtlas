@@ -1,0 +1,257 @@
+# BinAtlas 知识库 · 技术 · dom:ad-detect
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:peb-debug-flags-inspection
+  name: 调试标志位读取
+  name_en: PEB Debug Flag Inspection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 读进程环境块里的调试标志与堆标志判断是否被调试。难点是这些字段既可能被合法工具改写，也可能被伪造，单看一处会误判。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe64
+  - art:pe32
+  outputs:
+  - 调试标志位取值
+  - 堆标志异常判定
+  - 是否被调试的初判
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: cdb -p {{pid}} -c "dt ntdll!_PEB @$peb; q"
+    note: 附加后打印进程环境块，观察调试标志字节与全局标志字段
+  - cmd: objdump -d -M intel {{binary}} | grep -nE "gs:0x60|fs:0x30"
+    note: 在反汇编里找按段寄存器取环境块的固定偏移，定位标志位读取点
+  pitfalls:
+  - 标志位被调试器之外的兼容层或注入运行时改过会造成误判，必须结合堆标志与调试对象一起看
+  - 偏移随位数不同，32 位从 fs 段取、64 位从 gs 段取，照抄偏移会读到无关字段
+  note: 与「调试标志位篡改」成对：识别侧读调试标志字节与全局标志字段，绕过侧原地写回同一字段。
+- id: tech:debug-register-inspection
+  name: 调试寄存器检查
+  name_en: Debug Register Inspection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 读线程上下文里的调试寄存器，判断是否有人设了硬件断点。难点是寄存器状态按线程保存，只看一个线程会漏。
+  difficulty: 3
+  prerequisites: []
+  artifacts:
+  - art:pe64
+  - art:pe32
+  outputs:
+  - 调试寄存器取值与断点配置
+  - 硬件断点是否存在
+  - 被监视地址范围
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: cdb -p {{pid}} -c "r dr0; r dr1; r dr2; r dr3; r dr6; r dr7; q"
+    note: 调试器会话内逐个读调试寄存器，前四个非零通常意味着有硬件断点
+  - cmd: strings -a {{binary}} | grep -c GetThreadContext
+    note: 静态确认目标是否导入线程上下文获取接口，这是读调试寄存器的前置调用
+  pitfalls:
+  - 调试寄存器属于线程上下文，新创建线程默认为零，必须逐线程检查才不会漏
+  - 使能位与长度位有固定编码，按位判断错会把数据断点当成执行断点
+  note: 与「调试寄存器清零」成对：识别侧按线程读寄存器，绕过侧清空使能位并回读确认。
+- id: tech:debug-port-object-inspection
+  name: 调试端口与对象检查
+  name_en: Debug Port and Debug Object Inspection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 查询进程的调试端口、调试对象句柄与调试标志，判断是否被接管。难点是不同信息类返回值语义不同，零值与非零值都可能有歧义。
+  difficulty: 3
+  prerequisites:
+  - tech:peb-debug-flags-inspection
+  artifacts:
+  - art:pe64
+  outputs:
+  - 调试端口与对象句柄状态
+  - 线程隐藏调试状态
+  - 进程是否处于被调试状态
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: strings -a {{binary}} | grep -c NtQueryInformationProcess
+    note: 确认目标是否引用进程信息查询接口，这是查调试端口与调试对象的最短路径
+  - cmd: strings -a {{binary}} | grep -c NtSetInformationThread
+    note: 确认是否存在线程信息设置调用，主动隐藏调试状态就靠这个接口
+  pitfalls:
+  - 调试端口在未附加时也可能非零，只凭非零值判定被调试会误报
+  - 线程级隐藏标志一旦设置不会自动清除，能发现主动隐藏行为，但无法区分调试器与其他工具
+  note: 与「调试对象解绑」成对：识别侧查端口、对象句柄与调试标志三类信息，绕过侧解除对象关联。
+- id: tech:breakpoint-integrity-inspection
+  name: 断点与完整性检查
+  name_en: Breakpoint and Integrity Inspection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 扫描代码段里的断点指令或比对节区校验和，发现内存被改写。难点是合法自修改代码与热补丁也会改字节，判定必须结合基线与范围。
+  difficulty: 3
+  prerequisites:
+  - tech:memory-read-write-patch
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 可疑断点指令位置
+  - 节区校验和差异
+  - 被改写字节的范围
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: r2 -q -c "/x cc" -c "q" {{binary}}
+    note: 在文件或进程映像里搜索断点指令字节，命中处需人工确认是否为真实断点
+  - cmd: readelf -S {{binary}} | grep -E "\.text|\.plt"
+    note: 先划定代码段边界，校验和覆盖范围不划清就会把数据段差异当成改写
+  pitfalls:
+  - 合法自修改代码、热补丁与调试器断点留下的字节差异完全相同，单看差异无法归因
+  - 按节区取校验和时若把未初始化段与对齐填充也算进去，正常加载就会产生偏差
+  note: 与「断点完整性绕过」成对：识别侧扫断点字节与校验和，绕过侧回填原始字节或不落断点。
+- id: tech:timing-delta-detection
+  name: 时间差检测
+  name_en: Timing Delta Detection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 比较关键代码段的执行耗时判断是否被单步或断点拖慢。难点是合法调度与虚拟化本身就有抖动，阈值定得越紧误报越多。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 代码段耗时分布
+  - 异常延时判定
+  - 阈值与误报率关系
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: strace -f -tt -e trace=clock_gettime,gettimeofday -p {{pid}}
+    note: 观察目标读时钟的调用频率与时机，时间差检测必然高频读时钟
+  - cmd: perf stat -e task-clock,context-switches -p {{pid}} sleep 5
+    note: 统计目标的时间片与上下文切换，用于区分调试停顿与被调度抢占
+  pitfalls:
+  - 虚拟机与容器里的时钟精度远低于物理机，同一阈值在虚拟化环境下必然误报
+  - 调度抢占、缺页与频率调节都会制造毫秒级抖动，只看单次测量不足以判定被调试
+  note: 与「时间源返回伪造」成对：识别侧测代码段耗时，绕过侧在时间接口层给出一致读数。
+- id: tech:exception-trap-flag-detection
+  name: 异常与陷阱标志检测
+  name_en: Exception and Trap Flag Detection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 用自抛异常、陷阱标志或未处理异常过滤器探测调试器是否接管了异常分发。难点是处理器顺序由系统决定，判定依赖对语义差异的理解。
+  difficulty: 4
+  prerequisites:
+  - tech:exception-dispatch-tracing
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 异常处理器链状态
+  - 陷阱标志是否被吞
+  - 调试器接管异常的判断
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: strings -a {{binary}} | grep -E "SetUnhandledExceptionFilter|AddVectoredExceptionHandler"
+    note: 静态定位目标是否注册了异常处理器，这类调用是自检手法的前置
+  - cmd: gdb -q -batch -p {{pid}} -ex "info signals"
+    note: 查看各信号处置表，陷阱信号若被设为不停止，说明异常会被调试器静默吞掉
+  pitfalls:
+  - 陷阱标志只对当前线程有效且执行一条指令后自动清除，跨线程或跨系统调用就不成立
+  - 未处理异常过滤器在被调试时不生效，这个差异可用来探测，但也可能被兼容层改变
+  note: 与「异常链接管」成对：识别侧看异常分发是否被接管，绕过侧插入处理器并给出期望返回值。
+- id: tech:system-info-debug-query
+  name: 系统调试状态查询
+  name_en: System Debug State Query
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 查询系统级调试器存在标志与调试对象枚举，判断整机是否处于被调试状态。难点是这类接口返回全局状态，粒度粗且易受兼容层影响。
+  difficulty: 3
+  prerequisites:
+  - tech:debug-port-object-inspection
+  artifacts:
+  - art:pe64
+  - art:driver
+  outputs:
+  - 内核调试开关状态
+  - 调试对象枚举结果
+  - 整机调试状态判定
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: strings -a {{binary}} | grep -c NtQuerySystemInformation
+    note: 确认目标是否调用系统信息查询接口，这是查内核调试状态的最短路径
+  - cmd: bcdedit /enum {current}
+    note: 在分析机上核对调试配置，与目标报告的状态做对照
+  pitfalls:
+  - 内核调试开关是启动期决定的全局值，用户态读到的共享数据页可能已被其他组件改写
+  - 调试对象枚举在海量句柄的机器上开销大，句柄权限不足时结果还不完整
+  note: 与「内核调试信息屏蔽」成对：识别侧查全局调试状态，绕过侧在更下层遮蔽同一批标志。
+- id: tech:linux-ptrace-selfcheck
+  name: ptrace 自附加检测
+  name_en: ptrace Self-Attach Detection
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 用自我附加或读跟踪者字段判断是否已被调试，失败即说明有人先接管。难点是检测与调试器的抢占有时序，检测逻辑本身会改变进程状态。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:elf64
+  - art:so
+  outputs:
+  - 跟踪者进程标识
+  - 自附加结果
+  - 进程可调试性状态
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: grep TracerPid /proc/{{pid}}/status
+    note: 直接读跟踪者字段，非零即表示已被某进程跟踪
+  - cmd: strings -a {{binary}} | grep -E "ptrace|dumpable"
+    note: 静态确认目标调用了附加接口或可转储性设置，两者常被组合使用
+  - cmd: cat /proc/sys/kernel/yama/ptrace_scope
+    note: 查看系统的附加限制级别，取值不同会改变自附加与外部附加的可行性
+  pitfalls:
+  - 自我附加成功后若不解脱，目标会一直处于被跟踪状态，后续正常调试反而无法附加
+  - 跟踪者字段由内核在附加时写入，用户态无法可靠伪造，绕过只能放到更下层
+  note: 与「ptrace 拦截与伪装」成对：识别侧读跟踪者字段与自附加结果，绕过侧在调用层拦截并伪造返回。
+  references:
+  - https://man7.org/linux/man-pages/man2/ptrace.2.html
+- id: tech:debugger-artifact-enumeration
+  name: 调试环境痕迹枚举
+  name_en: Debugger Artifact Enumeration
+  domain:
+  - dom:ad-detect
+  parent: dom:ad-detect
+  def: 枚举窗口类名、已加载模块、调试相关注册表值与父进程，从环境痕迹推断调试器存在。难点是痕迹来源多且都能被改写，单一痕迹不足定论。
+  difficulty: 3
+  prerequisites:
+  - tech:peb-debug-flags-inspection
+  - tech:debug-port-object-inspection
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 可疑窗口与模块清单
+  - 调试相关注册表项
+  - 父进程与启动链判定
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: cat /proc/{{pid}}/maps | grep -iE "dbg|debug|trace"
+    note: 在映射里找调试与追踪相关模块，注入式调试器都会留下映射
+  - cmd: ls -l /proc/{{pid}}/exe /proc/{{pid}}/cwd
+    note: 核对可执行体与工作目录，异常启动路径常暴露被包裹的调试会话
+  - cmd: grep -E "^(PPid|Name)" /proc/{{pid}}/status
+    note: 读取父进程号与进程名，启动链异常本身是一类痕迹
+  pitfalls:
+  - 模块名可被改写的调试器完全避开关键词匹配，靠名字枚举会漏掉内嵌调试组件
+  - 同名窗口类与进程名在正常软件里也大量存在，按名字命中就下结论误报率极高
+  note: 与「模块与句柄遮蔽」成对：识别侧多路枚举痕迹，绕过侧把模块与句柄从枚举视图里摘掉。

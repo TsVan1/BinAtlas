@@ -1,0 +1,268 @@
+# BinAtlas 知识库 · 技术 · dom:ad-bypass
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:peb-flags-rewrite
+  name: 调试标志位篡改
+  name_en: PEB Debug Flag Rewriting
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 在用户态直接改写进程环境块中的调试标志与堆标志，让读取方看到干净值。难点是改写点可能被二次校验，堆标志还牵涉堆管理器的一致性。
+  difficulty: 2
+  prerequisites:
+  - tech:peb-debug-flags-inspection
+  artifacts:
+  - art:pe64
+  - art:pe32
+  outputs:
+  - 改写后的标志位取值
+  - 需要恢复的原始值
+  - 检测规避的生效范围
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: cdb -p {{pid}} -c "eb @$peb+2 0; q"
+    note: 调试器会话内把调试标志字节写零，写入前先确认目标位数与字段偏移
+  - cmd: cdb -p {{pid}} -c "ed @$peb+0x68 0; q"
+    note: 32 位下清零全局标志字段；64 位偏移不同，写错会破坏相邻字段
+  - cmd: cdb -p {{pid}} -c "dt ntdll!_PEB @$peb; q"
+    note: 改写后回读结构确认字段已变，避免写到别名地址
+  pitfalls:
+  - 只清零一处标志而堆标志仍带调试位，成套读取的检测照样命中
+  - 改写后不保留原始值，调试器自身依赖这些标志判断状态时会行为异常
+  note: 与「调试标志位读取」成对：识别侧读标志字节与全局标志字段，绕过侧原地写回同一字段并保留原值。
+- id: tech:debug-register-clearing
+  name: 调试寄存器清零
+  name_en: Debug Register Clearing
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 清除线程上下文里的硬件断点配置，使读取调试寄存器的检测看到空值。难点是寄存器按线程保存，清掉后原有硬件断点立即失效。
+  difficulty: 3
+  prerequisites:
+  - tech:debug-register-inspection
+  artifacts:
+  - art:pe64
+  - art:pe32
+  outputs:
+  - 清零后的寄存器状态
+  - 失效的硬件断点清单
+  - 恢复方案
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: cdb -p {{pid}} -c "r dr0=0; r dr1=0; r dr2=0; r dr3=0; r dr7=0; q"
+    note: 调试器会话内逐个清零，控制寄存器清零会同时关掉所有使能位
+  - cmd: cdb -p {{pid}} -c "r dr6; r dr7; q"
+    note: 回读状态位确认清空生效，状态寄存器里残留的中断原因也要一并处理
+  pitfalls:
+  - 清零只作用于当前线程上下文，其他线程的断点配置仍在，逐线程处理才完整
+  - 清控制寄存器会让原有硬件断点失效，关键路径必须改用不会暴露观察点的手段
+  note: 与「调试寄存器检查」成对：识别侧逐线程读寄存器，绕过侧清使能位并回读确认。
+- id: tech:debug-object-detach
+  name: 调试对象解绑
+  name_en: Debug Object Detach
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 主动解除调试器与进程之间的调试对象关联，让调试端口与句柄查询回到未调试状态。难点是解绑后事件不再上报，断点与补丁要自行维护。
+  difficulty: 4
+  prerequisites:
+  - tech:debug-port-object-inspection
+  artifacts:
+  - art:pe64
+  outputs:
+  - 解绑后的调试对象状态
+  - 需自行维护的断点与补丁清单
+  - 事件上报中断的范围
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: cdb -p {{pid}} -c "x ntdll!NtRemoveProcessDebug; q"
+    note: 确认运行环境里解绑接口的地址，接口未导出时必须按序号或特征定位
+  - cmd: strings -a {{binary}} | grep -E "DebugActiveProcess|ContinueDebugEvent"
+    note: 静态确认目标自身是否使用调试接口，避免解绑与目标的调试逻辑冲突
+  pitfalls:
+  - 解绑会终止调试事件循环，进程内已有的软件断点不会被自动摘除，残留断点会引发访问异常
+  - 解绑后重新附加会被目标检测到二次附加行为，比一次附加更可疑
+  note: 与「调试端口与对象检查」成对：识别侧查端口与对象句柄，绕过侧解除关联后自行维护断点。
+- id: tech:breakpoint-integrity-bypass
+  name: 断点完整性绕过
+  name_en: Breakpoint Integrity Bypass
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 让运行时改写不被校验和与断点扫描发现，或干脆不写目标代码。难点是校验点可能在磁盘映像上做，此时内存补丁完全无效。
+  difficulty: 4
+  prerequisites:
+  - tech:breakpoint-integrity-inspection
+  - tech:conditional-breakpoint-watch
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 校验和一致的内存状态
+  - 未落地的观察点方案
+  - 补丁点与校验范围对照
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "x/8xb $rip" -ex "set *(unsigned char *)$rip
+      = 0xcc"
+    note: 落断点前先读原始字节，命中后必须回填，否则按节区取校验和会暴露改写
+  - cmd: readelf -S {{binary}} | grep -E "\.text"
+    note: 先划定代码段范围，确认校验覆盖哪些节，再决定补丁放在范围外还是回填
+  pitfalls:
+  - 检测若对磁盘文件取哈希，内存里的回填毫无意义，必须改为不修改映像的观察方式
+  - 回填窗口期仍存在，检测只需在窗口内采样一次就能发现断点，时序要一并考虑
+  note: 与「断点与完整性检查」成对：识别侧扫断点字节与校验和，绕过侧回填原始字节或不写映像。
+- id: tech:time-source-hooking
+  name: 时间源返回伪造
+  name_en: Time Source Hooking
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 在时间接口层拦截并返回一致的耗时，让时间差检测看不到停顿。难点是部分计时指令在用户态直接读硬件，接口层钩子根本拦不住。
+  difficulty: 4
+  prerequisites:
+  - tech:timing-delta-detection
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 被拦截的时间接口清单
+  - 伪造后的耗时读数
+  - 无法拦截的计时路径
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: ltrace -e "clock_gettime+gettimeofday" -p {{pid}}
+    note: Linux 上观察目标实际调用哪个时间接口，钩子要落在真正的调用点上
+  - cmd: gdb -q -batch -p {{pid}} -ex "find /b $pc, $pc+0x400, 0x0f, 0x31"
+    note: 在代码里按字节搜计时指令的操作码，确认存在绕过接口层的计时路径
+  pitfalls:
+  - 计时指令不经系统调用，用户态钩子对它无效，只能靠虚拟化层或改代码路径处理
+  - 时间返回被改成固定值后，目标自身的超时与轮询逻辑会一起失效，反而产生新的可观测异常
+  note: 与「时间差检测」成对：识别侧测代码段耗时，绕过侧在接口层给出一致读数。
+- id: tech:exception-chain-takeover
+  name: 异常链接管
+  name_en: Exception Chain Takeover
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 抢占或改写目标的异常处理器链，让异常自检看到期望结果后继续执行。难点是处理器顺序由系统决定，插入位置错了就影响不到判定。
+  difficulty: 4
+  prerequisites:
+  - tech:exception-trap-flag-detection
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 接管后的处理器顺序
+  - 自检的返回值
+  - 异常继续执行的路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: strings -a {{binary}} | grep -E "UnhandledExceptionFilter|VectoredException"
+    note: 先定位目标注册了哪类处理器，向量化处理器优先级最高，接管要从它入手
+  - cmd: gdb -q -batch {{binary}} -ex "handle SIGSEGV nostop noprint pass" -ex run
+    note: 让调试器不介入而把信号交给目标自身处理器，观察目标的异常逻辑是否被满足
+  pitfalls:
+  - 处理器返回值语义分继续执行与重新抛出，改写错了会把可控异常变成进程终止
+  - 接管只对走处理器链的异常有效，直接终止进程的异常类型不会经过这条路径
+  note: 与「异常与陷阱标志检测」成对：识别侧看分发是否被接管，绕过侧插入处理器并给出期望返回值。
+- id: tech:kernel-info-masking
+  name: 内核调试信息屏蔽
+  name_en: Kernel Debug Information Masking
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 在内核层或查询接口层遮蔽调试器存在标志，让系统级检测读到未调试状态。难点是这些状态是多组件共享的全局值，局部改写会破坏一致性。
+  difficulty: 5
+  prerequisites:
+  - tech:system-info-debug-query
+  - tech:kernel-local-debugging
+  - tech:kernel-crash-dump-analysis
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  outputs:
+  - 屏蔽后的调试状态读数
+  - 受影响组件清单
+  - 全局一致性的代价评估
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: cdb -p {{pid}} -c "dd nt!KdDebuggerEnabled L1; q"
+    note: 调试器会话内读内核调试开关，改写前先确认符号与内存页属性
+  - cmd: windbg -kl -c "dt nt!_KDDEBUGGER_DATA64; q"
+    note: 本地内核调试下按结构体名读调试数据块，避免按固定偏移硬编码
+  pitfalls:
+  - 内核调试开关所在共享页是只读的，强行改写需要先改页属性，处理不当会引发整机异常
+  - 不同编译号的内核结构偏移不同，按固定偏移改写会命中相邻字段并造成稳定性的隐蔽问题
+  note: 与「系统调试状态查询」成对：识别侧查全局调试标志，绕过侧在共享页或查询接口层遮蔽。
+- id: tech:ptrace-interception
+  name: ptrace 拦截与伪装
+  name_en: ptrace Interception and Masquerading
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 拦截目标的自我附加调用或伪造跟踪者字段，让基于附加的自检通过。难点是跟踪者字段由内核写入，接口层伪造只对走库调用的路径有效。
+  difficulty: 4
+  prerequisites:
+  - tech:linux-ptrace-selfcheck
+  artifacts:
+  - art:elf64
+  - art:so
+  outputs:
+  - 拦截生效的调用清单
+  - 伪造后的自检返回值
+  - 未覆盖的直接系统调用路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: cat /proc/sys/kernel/yama/ptrace_scope
+    note: 先确认系统的附加限制级别，限制过严时拦截与真实附加都会失败
+  - cmd: gdb -q -batch {{binary}} -ex "catch syscall ptrace" -ex run
+    note: 在附加系统调用上停住，确认自我附加发生的时机与返回值判断点
+  - cmd: objdump -d -M intel {{binary}} | grep -cE "syscall|int 0x80"
+    note: 统计直接系统调用点，静态链接或直接调用会绕过库层拦截
+  pitfalls:
+  - 目标直接执行系统调用指令时库层拦截完全失效，必须改代码路径或在更下层拦截
+  - 跟踪者字段在附加后由内核维护，用户态伪造只骗过读文件的路径，不改变内核里的真实状态
+  references:
+  - https://man7.org/linux/man-pages/man2/ptrace.2.html
+  note: 与「ptrace 自附加检测」成对：识别侧读跟踪者字段，绕过侧拦调用并伪造返回值。
+- id: tech:module-handle-hiding
+  name: 模块与句柄遮蔽
+  name_en: Module and Handle Hiding
+  domain:
+  - dom:ad-bypass
+  parent: dom:ad-bypass
+  def: 让调试器注入的模块与相关句柄不出现在枚举结果里，降低环境痕迹的可信度。难点是枚举有多条路径，只断用户态链表时内核枚举照样看得见。
+  difficulty: 5
+  prerequisites:
+  - tech:peb-flags-rewrite
+  - tech:debug-object-detach
+  - tech:kernel-info-masking
+  - tech:debugger-artifact-enumeration
+  artifacts:
+  - art:pe64
+  - art:driver
+  outputs:
+  - 遮蔽后的模块与句柄视图
+  - 未被覆盖的枚举路径
+  - 稳定性回归结论
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: cdb -p {{pid}} -c "lm; q"
+    note: 调试器会话内列出模块视图，遮蔽后回读这里确认目标侧枚举已看不到
+  - cmd: cat /proc/{{pid}}/maps | wc -l
+    note: 统计映射条目数作为基线，遮蔽前后条目变化能反映处理是否完整
+  pitfalls:
+  - 从链表摘掉模块后若再卸载或释放，宿主会踩到已断开的指针，稳定性优先于隐蔽性
+  - 只处理用户态链表时，基于内核内存描述符的枚举仍能列出全部模块，遮蔽范围要如实评估
+  note: 与「调试环境痕迹枚举」成对：识别侧多路枚举痕迹，绕过侧从链表与句柄表里摘除。

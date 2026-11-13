@@ -1,0 +1,281 @@
+# BinAtlas 知识库 · 技术 · dom:re-static
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:binary-triage-metadata
+  name: 二进制元信息研判
+  name_en: Binary Triage & Metadata Review
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 读头部、节区、加载命令与依赖表，先判断架构、位数、链接方式与保护项，再决定后续路线。难点是加壳或篡改头部后元信息会主动骗人，必须交叉核验。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  outputs:
+  - 架构位数与链接方式结论
+  - 保护机制清单
+  - 值得深挖的节区与导入表
+  - 后续分析路线建议
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: file {{binary}}
+    note: 先拿架构与位数；被混淆的样本会在此处给出误导性的可执行类型说明
+  - cmd: readelf -h -l {{binary}}
+    note: ELF 侧看入口、程序头与段权限；PIE 与 RELRO 状态在这里能直接读到
+  - cmd: rabin2 -I {{binary}}
+    note: 一次取架构位数、加固项与签名信息，PE/ELF/Mach-O 通用
+  - cmd: python3 -c "import pefile,sys; pe=pefile.PE(sys.argv[1]); [print(s.Name,
+      round(float(s.get_entropy()),2)) for s in pe.sections]" {{binary}}
+    note: 按节区熵筛可疑区段；PE 专用，ELF 侧只能靠经验比对
+  pitfalls:
+  - 节区名可被伪造，把高熵代码段命名为 .rdata 就能骗过按名字判断的人
+  - 32 位与 64 位混判会让后续所有地址计算偏移，PE32+ 的可选头大小不同，别照搬 32 位经验
+  - 带合法签名的程序也可能含高熵段，熵高不必然等于加壳
+  - 剥离符号不等于加壳，strip 之后动态符号表通常仍可用
+- id: tech:disassembly
+  name: 反汇编
+  name_en: Disassembly
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 把机器码还原为汇编指令并划分指令与数据边界，是所有静态工作的地基。难点是代码与数据混排、变长指令与花指令会让线性扫描错位，凭空生成假指令。
+  difficulty: 3
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  - art:shellcode
+  outputs:
+  - 带指令与数据判定的汇编清单
+  - 花指令与错位位置标注
+  - 可复现的段映射与加载基址
+  - 从真实入口重扫的结果
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 线性扫描的基线输出；含嵌入数据时会出现假指令，只作参照
+  - cmd: r2 -q -c "aa; afl" {{binary}}
+    note: 递归下降加函数级切分，比线性扫描更贴近真实边界
+  - cmd: radare2 -q -c "pd 40 @ entry0" {{binary}}
+    note: 从入口反汇编固定条数，用于人工确认入口处的解壳桩形态
+  pitfalls:
+  - 线性扫描会把嵌入数据当指令解，多出来的指令不是函数体，别直接采信
+  - x86 变长指令从错误偏移起步会连锁错位，必须从真实入口或调用点重扫
+  - 反汇编给出的是虚拟地址，与文件偏移不是一回事，对齐换算后才对得上
+  - ARM 与 MIPS 需显式指定指令集与字节序，选错时输出全错且不会报错
+- id: tech:function-boundary-identification
+  name: 函数边界识别
+  name_en: Function Boundary Identification
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 判定哪些字节属于同一函数，在符号被剥离后尤其关键。难点是尾调用、内联、热冷分区与跳板会让边界不再连续，单靠调用图必然漏函数。
+  difficulty: 3
+  prerequisites:
+  - tech:disassembly
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:so
+  outputs:
+  - 函数起止地址表
+  - 函数调用关系图
+  - 内联与尾调用候选点
+  - 无法归属的代码区间清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: r2 -q -c "aa; afl" {{binary}}
+    note: 先拿一版递归下降的函数表，作为人工校正的起点
+  - cmd: objdump -d {{binary}} | grep -n "endbr64" | head -40
+    note: 存在 CET 标记时 endbr64 常落在函数入口，可作边界校验锚点
+  - cmd: nm -D {{binary}}
+    note: 动态符号仍能给出部分真实入口，用来校正猜测出的边界
+  pitfalls:
+  - 尾调用以 jmp 转出，按返回指令切分会把两个函数并成一个
+  - 编译器把冷代码拆到独立节区后，同一函数的片段在文件里并不相邻
+  - 相邻函数共用一段收尾代码是链接器合并的结果，按 ret 切分必然出错
+  - 无符号时没有可信的入口集合，只能靠异常表与调用点推断，必须承认存在不确定区间
+- id: tech:xref-symbol-recovery
+  name: 交叉引用与符号还原
+  name_en: Cross-Reference & Symbol Recovery
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 建立代码到数据、代码到代码的引用关系，为匿名函数与全局对象命名。难点是无符号时引用只能靠指令语义推断，间接寻址与表驱动会让引用链断开。
+  difficulty: 3
+  prerequisites:
+  - tech:function-boundary-identification
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:apk
+  outputs:
+  - 交叉引用表
+  - 匿名函数与全局变量的命名建议
+  - 关键数据结构推断草稿
+  - 字符串到代码的引用路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: r2 -q -c "aaa; axt @ sym.main" {{binary}}
+    note: 查某地址被谁引用；aaa 会把数据引用一并分析
+  - cmd: rabin2 -zz {{binary}}
+    note: 列出字符串及其地址与引用线索，是给匿名函数命名最省力的入口
+  - cmd: objdump -T {{binary}}
+    note: 动态符号表保留导入名，可反推被调用的外部函数
+  pitfalls:
+  - 字符串引用常指向拼接后的中间缓冲区，看到常量不代表逻辑在那里
+  - 函数表与虚表里的引用在静态视图里表现为数据，xref 查不出来
+  - 位置无关代码的引用经 GOT 中转，直接读指令立即数会得到错误目标
+  - 同名导入符号在 PLT 里被多个调用点共用，不代表调用语义相同
+- id: tech:stack-frame-recovery
+  name: 栈帧与局部变量布局
+  name_en: Stack Frame & Local Variable Recovery
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 还原参数、局部变量与返回地址在栈上的布局。难点是优化后不再保留帧指针，变量被寄存器瓜分，栈上只剩溢出临时区，偏移与变量不再一一对应。
+  difficulty: 4
+  prerequisites:
+  - tech:function-boundary-identification
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  outputs:
+  - 栈帧布局与参数位置表
+  - 局部变量的宽度与生命周期
+  - 缓冲区对象大小推断
+  - 与调试器实测结果的核对记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -ex "disassemble /r main" {{binary}}
+    note: 带原始字节看入口与收尾代码，确认是否省略帧指针
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 核对栈指针的成对调整，定位栈溢出临时区的大小
+  - cmd: readelf --debug-dump=frames {{binary}}
+    note: 有异常帧信息时可直接拿栈展开数据，比手工推更可靠
+  pitfalls:
+  - 省略帧指针的构建里该寄存器已被当通用寄存器用，按标准序言找变量必然错
+  - 栈上一个偏移可能对应结构体整体，相邻两个偏移未必是两个独立变量
+  - 64 位 Windows 的调用影子空间会被误认成局部变量，它实际属于被调函数
+  - 编译器复用栈槽给生命周期不重叠的变量，一个偏移可能对应多个逻辑变量
+- id: tech:control-flow-graph-recovery
+  name: 控制流图重建
+  name_en: Control Flow Graph Recovery
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 把指令序列重建为基本块与有向边，还原分支与循环结构。难点是间接跳转与跳转表在静态下无法穷举目标，目标缺失会让图结构性断裂。
+  difficulty: 4
+  prerequisites:
+  - tech:function-boundary-identification
+  - tech:disassembly
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:elf32
+  outputs:
+  - 基本块与边列表
+  - 间接跳转目标候选集
+  - 循环与异常出口标注
+  - 不可达块清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: radare2 -q -c "aaa; agfj @ sym.main" {{binary}}
+    note: 输出函数级控制流图的 JSON，便于脚本统计基本块与边
+  - cmd: r2 -q -c "aaa; pdf @ sym.main" {{binary}}
+    note: 带分支标注的反汇编视图，人工核对间接跳转处的目标推测
+  - cmd: objdump -d {{binary}} | grep -cE "^\s+[0-9a-f]+:"
+    note: 粗算指令规模，用于估算图的复杂度与后续分析代价
+  pitfalls:
+  - 跳转表目标只存在于数据段，边界算错就会把目标解析到相邻数据上
+  - 异常与信号处理路径也是控制流的一部分，只建正常路径会漏掉整类边
+  - 寄存器与内存间接跳转在静态下无法完全解析，图不闭合应标注为不确定边
+  - 混淆器插入的垃圾块与永不执行块会让图虚胖，块数多不代表逻辑复杂
+- id: tech:static-data-flow-analysis
+  name: 静态数据流分析
+  name_en: Static Data Flow Analysis
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 沿定义使用链追踪数据的来源与去向，判定某个值是否受外部输入影响。难点是别名、指针传递与跨函数传播让事实集迅速膨胀，精度与收敛性必须取舍。
+  difficulty: 4
+  prerequisites:
+  - tech:control-flow-graph-recovery
+  - tech:xref-symbol-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:jar
+  outputs:
+  - 定义使用链
+  - 污点传播路径
+  - 别名与指针目标集合
+  - 分析不收敛的代码区域标注
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: python3 -c "import angr,sys; p=angr.Project(sys.argv[1], auto_load_libs=False);
+      print(p.arch, hex(p.entry))" {{binary}}
+    note: 载入分析框架做符号化数据流；先确认架构与入口解析正确
+  - cmd: r2 -q -c "aaa; afvd @ sym.main" {{binary}}
+    note: 列出函数内变量与访问位置，作为手工构建定义使用链的底稿
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 工具结论有疑问时回落到指令层核对寄存器级传播
+  pitfalls:
+  - 过程间分析在递归与虚调用处容易发散，必须设深度上限，否则跑不完
+  - 把受输入影响直接等同于可利用，是从数据流跳到结论的典型越界
+  - 优化后的寄存器复用会制造假依赖，同一个寄存器不等于同一个变量
+  - 关闭外部库加载会切断跨库数据流，结论只在闭包内成立
+- id: tech:compiler-provenance-identification
+  name: 编译器与优化级别识别
+  name_en: Compiler Provenance Identification
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 从启动代码、库函数特征与代码生成风格判断编译器族与优化档位，据此预判语义被改写的程度。难点是定制工具链与多语言混编会模糊这些特征。
+  difficulty: 3
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:so
+  outputs:
+  - 编译器族与版本区间推断
+  - 优化档位判断
+  - 可预期的语义改写清单
+  - 需重点核对的代码区域
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: strings -a {{binary}} | grep -iE "GCC:|clang version|Microsoft|Go build"
+    note: 版本字符串是最直接的证据，但可能被剥离或加密
+  - cmd: readelf -p .comment {{binary}}
+    note: ELF 常保留编译器版本注释；被 strip 或二次处理后为空
+  - cmd: nm -C {{binary}} | head -50
+    note: 看符号修饰风格与内联库函数是否独立成符号，可反推工具链
+  pitfalls:
+  - 版本字符串可以被伪造或整体剥离，缺证据时只能给区间结论
+  - 交叉编译产物会带宿主工具链痕迹，与实际运行平台无关
+  - 静态链接的第三方库保留其原始编译特征，别算到主程序头上
+  - 同一编译器不同优化档位的代码风格差异很大，一句话概括整个样本必错

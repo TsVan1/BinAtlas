@@ -1,0 +1,261 @@
+# BinAtlas 知识库 · 技术 · dom:wk-debug
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:kernel-debug-transport-setup
+  name: 内核调试通道搭建
+  name_en: Kernel Debug Transport Setup
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 建立宿主机与目标机的内核调试通道，选择串口、网络或虚拟机专用管道，让目标机在启动早期就进入可调试状态。难点是通道建立早于系统启动，配错时目标机侧只会静默停住或直接蓝屏。
+  difficulty: 4
+  prerequisites: []
+  artifacts:
+  - art:driver
+  - art:memory-dump
+  outputs:
+  - 可用的调试通道
+  - 目标机启动配置
+  - 连通性核对步骤
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: bcdedit /debug on
+    note: 为目标机当前启动项打开内核调试，重启后生效
+  - cmd: bcdedit /dbgsettings
+    note: 查看当前传输方式、端口与密钥，确认目标机侧参数与宿主机一致
+  - cmd: .sympath srv*{{sympath}}*https://msdl.microsoft.com/download/symbols
+    note: 在调试器里设置符号路径与本地缓存目录，路径顺序决定查找优先级
+  - cmd: .reload /f
+    note: 强制重载符号；改完符号路径必须执行一次，否则仍用旧缓存
+  pitfalls:
+  - 目标机没重启就以为通道已生效，内核调试开关只在启动时读取
+  - 网络调试两侧密钥或端口不一致时表现是长时间等待而不是报错
+  - 虚拟机快照要在配好调试通道之后再打，否则每次恢复都得重配
+  - 宿主机防火墙拦掉调试端口，现象是目标机已停住但主机没有任何输出
+- id: tech:kernel-symbol-management
+  name: 内核符号与类型信息
+  name_en: Kernel Symbol & Type Info
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 让调试器能解析内核与驱动的函数名、全局变量和结构类型，来源是公开符号服务器、本地缓存与私有符号。难点是公开符号不含未导出语义：类型里看得到字段，仍需判断它到底在表达什么。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-debug-transport-setup
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:pe64
+  outputs:
+  - 符号路径与缓存配置
+  - 目标模块符号加载状态
+  - 关键结构类型清单
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: .sympath srv*{{sympath}}*https://msdl.microsoft.com/download/symbols
+    note: 公开符号从官方符号服务器按需下载并缓存到本地目录
+  - cmd: .reload /f {{module}}
+    note: 只重载目标模块符号，比全量重载快得多
+  - cmd: '!lmi {{module}}'
+    note: 查看模块的符号类型与加载状态，判断是私有符号还是仅导出符号
+  - cmd: dt nt!_EPROCESS
+    note: 打印结构类型定义；字段随版本增删重排，一律以当前符号输出为准
+  pitfalls:
+  - 把旧版本的偏移硬编码进脚本，换构建就错位，必须每次从符号取
+  - 符号缓存目录被清理或不可写会退化成无符号调试，栈与类型全变成裸地址
+  - 私有符号版本与目标机二进制不匹配时，解析出的字段名是看着对的错
+- id: tech:bugcheck-dump-triage
+  name: 蓝屏转储归因
+  name_en: Bugcheck Dump Triage
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 从崩溃转储还原蓝屏现场：错误码与四个参数、出错线程栈、被引用的对象与池块。难点是崩溃点常是受害者而不是元凶，栈也常被破坏，必须靠参数含义与内存交叉验证才能指认真正原因。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-debug-transport-setup
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 错误码与参数解读
+  - 归因结论与证据链
+  - 待验证的复现条件
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: .bugcheck
+    note: 打印转储里的错误码与四个参数；先弄清参数含义，再看栈
+  - cmd: '!analyze -v'
+    note: 自动归因输出，把它给的模块名当线索而不是结论
+  - cmd: kb
+    note: 带参数的栈回溯，参数值常是判断访问了哪个地址的关键
+  - cmd: '!pool <地址>'
+    note: 对栈里出现的可疑地址查池块归属，区分已释放与越界
+  pitfalls:
+  - 直接采信自动分析给出的模块名，会把受害者驱动当成根因
+  - 只看崩溃线程的栈，忽略同一池块被其他线程释放的时间线
+  - 小内存转储不含全部内存，池与对象内容缺失时要换完整转储重来
+- id: tech:kernel-breakpoint-strategy
+  name: 内核断点策略
+  name_en: Kernel Breakpoint Strategy
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 在内核代码上选合适的断点类型与位置，并加命中条件以避免中断风暴。难点是软件断点会改写代码页并改变时序，既可能被完整性校验判定为篡改，也会让超时类问题直接不再复现。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-debug-transport-setup
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 断点布置方案
+  - 命中条件与过滤规则
+  - 断点对时序影响的评估
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: bp {{module}}!<函数名>
+    note: 在指定函数入口下断；函数名先用符号确认，不要用猜出来的名字
+  - cmd: ba w8 <地址>
+    note: 硬件写断点监视指定地址，不改写代码页；数量有限且受字节宽度限制
+  - cmd: bl
+    note: 查看断点列表与命中计数，确认条件是否真的生效
+  - cmd: g
+    note: 继续运行；内核断点命中会让整机停住，无人值守时慎用
+  pitfalls:
+  - 在高频路径上无条件断点会把系统拖成假死，务必先加条件或命中计数
+  - 软件断点改写的代码页可能被完整性检查判为篡改，表现为另一种蓝屏
+  - 断点让竞态窗口消失，问题不复现不代表不存在，应改用日志或计数器
+- id: tech:live-kernel-state-inspection
+  name: 运行时状态查看
+  name_en: Live Kernel State Inspection
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 在目标机暂停时枚举进程线程、句柄、对象与池的当前状态，用类型化视图代替裸内存读取。难点是所谓当前状态只是一个时间切片，必须结合等待链与引用关系才能判断系统卡在哪一环。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 进程与线程快照
+  - 句柄与对象引用关系
+  - 资源占用与等待点清单
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: '!process 0 0'
+    note: 列出全部进程及结构地址与线程摘要，作为后续命令的地址来源
+  - cmd: '!vm'
+    note: 查看内核虚拟内存与池的总体占用，先分清是耗尽还是单点异常
+  - cmd: '!handle 0 f Process'
+    note: 列出进程类句柄及其引用计数，句柄泄漏常在这里显形
+  - cmd: dt nt!_EPROCESS
+    note: 查看结构定义，确认要读的字段在当前版本的确切名字
+  pitfalls:
+  - 把一次快照当成稳定状态，会漏掉正在迁移或正在退出的对象
+  - 只看句柄数量不看引用计数，分不清句柄泄漏与内核对象未释放
+  - 多处理器上各处理器的暂停时机不同，线程栈可能停在与问题无关的位置
+- id: tech:kernel-pool-forensics
+  name: 池内存取证
+  name_en: Kernel Pool Forensics
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 通过池标签、区块头与分配大小还原内核动态内存的归属与生命周期，定位越界、重复释放与泄漏。难点是布局受验证选项与系统配置影响，已释放区块被复用后只能靠元数据与时间线反推。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  - tech:live-kernel-state-inspection
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 池块归属与大小结论
+  - 泄漏或破坏的时间线
+  - 可疑分配点清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!poolused 2'
+    note: 按标签汇总池占用并排序，先找异常放大的标签
+  - cmd: '!poolfind <标签>'
+    note: 枚举指定标签的全部池块；标签须为四字符且大小写敏感
+  - cmd: '!pool <地址>'
+    note: 查看单个地址所属池块与相邻区块，判断越界还是已释放
+  pitfalls:
+  - 池标签可被分配方任意指定，第三方复用通用标签会让归属判断直接失效
+  - 开着特殊池或验证选项时布局与生产环境不同，结论不能直接外推
+  - 已释放区块头部被覆盖后仍强行解读，会得出完全错误的归属
+- id: tech:kernel-stack-unwind-analysis
+  name: 调用栈回溯分析
+  name_en: Kernel Stack Unwind Analysis
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 在缺少帧指针且被内联优化的内核代码上还原真实调用链，并区分线程上下文与中断上下文。难点是优化后栈帧不连续、参数也未必留在栈上，回溯结论必须由多处证据互相印证。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  - tech:live-kernel-state-inspection
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 可信调用链
+  - 上下文类型判定
+  - 可疑栈帧与印证证据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: kb
+    note: 带前三个参数的栈回溯，先看参数是否合理再判断调用关系
+  - cmd: dps @rsp L40
+    note: 按指针宽度扫描栈区，用于回溯断裂处人工寻找返回地址；x64 栈指针为 rsp
+  - cmd: .frame 1
+    note: 切换到指定栈帧上下文，再观察该帧的局部状态
+  pitfalls:
+  - 把扫描到的任意指针当返回地址，会凭空造出一段不存在的调用链
+  - 中断或延迟过程调用的栈与线程栈交织，不先判定上下文就会读错帧
+  - 内联展开让同一逻辑函数出现在多处，按函数名归因会重复计数
+- id: tech:kernel-hang-diagnosis
+  name: 挂起与超时诊断
+  name_en: Hang & Timeout Diagnosis
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 系统不蓝屏但整体卡死或周期性停顿，需从等待链、锁持有者与中断占用找出卡点。难点是没有崩溃现场，只能靠谁在等谁的关系图与暂停时机推断，而暂停本身又会改变卡点表现。
+  difficulty: 5
+  prerequisites:
+  - tech:bugcheck-dump-triage
+  - tech:kernel-stack-unwind-analysis
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  - art:driver
+  outputs:
+  - 等待关系图
+  - 卡点定位结论
+  - 复现与验证方案
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!analyze -hang'
+    note: 自动检测挂起类问题，输出被阻塞的线程与疑似持有者
+  - cmd: '!stacks 2'
+    note: 按调用栈聚合全部线程，一眼看出大量线程堆在同一处
+  - cmd: '!locks'
+    note: 列出内核锁及其持有者，确认是否存在锁竞争或死锁
+  pitfalls:
+  - 只在卡死瞬间取一次快照，无法区分持锁线程被抢占与真正死锁
+  - 把周期性停顿当成完全卡死，会漏掉高频中断或延迟过程调用这条线
+  - 调试器暂停所有处理器本身会改变调度，卡点可能在恢复后自行消失

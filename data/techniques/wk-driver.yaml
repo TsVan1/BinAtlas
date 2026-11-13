@@ -1,0 +1,253 @@
+# BinAtlas 知识库 · 技术 · dom:wk-driver
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:driver-toolchain-setup
+  name: 驱动开发环境搭建
+  name_en: Driver Development Environment Setup
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 搭出可编译、可部署、可回滚的内核驱动开发环境：编译链与头库版本对齐、目标机快照、测试签名与加载开关。难点是签名与加载策略随系统版本和启动配置变化，环境没搭对时错误会伪装成代码缺陷。
+  difficulty: 4
+  prerequisites: []
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 可编译的驱动工程骨架
+  - 可回滚的目标机快照与加载配置
+  - 测试签名链路
+  - 环境参数核对清单
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: bcdedit /set testsigning on
+    note: 打开测试签名以加载自签名驱动；需重启生效，开启后桌面会保留测试模式标记
+  - cmd: bcdedit /enum {current}
+    note: 读取当前启动项的签名与调试开关，确认改动落在实际生效的那一项上
+  - cmd: signtool sign /fd sha256 /f <pfx 路径> /p <口令> {{driver}}
+    note: 用自签名证书签驱动仅供本机开发；对外分发必须走官方硬件门户，不能靠自签
+  - cmd: sc create <服务名> type= kernel binPath= {{driver}}
+    note: 注册为内核服务以便加载；type= 与 binPath= 后面的空格是语法要求，不是排版
+  pitfalls:
+  - 开了安全启动或内存完整性时测试签名策略可能不生效，先确认这两项状态再怀疑代码
+  - 编译器、头库与目标系统版本不对齐时能编译通过但加载失败，务必把版本组合写进项目文档
+  - 共用调试机上改启动配置会影响所有人，改动前先留下回滚命令
+- id: tech:driver-signing-policy
+  name: 驱动签名与加载策略
+  name_en: Driver Signing & Load Policy
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 判定一个驱动在当前系统上能否加载：签名链完整性、签署者身份、目录文件与启动配置里的强制项。难点是策略随系统版本和硬件安全功能变化，同一份驱动在两台机器上结论可以相反。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-toolchain-setup
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 驱动可加载性判定
+  - 签名链与签署者核对结果
+  - 影响加载的策略项清单
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: signtool verify /pa /v {{driver}}
+    note: 按 Authenticode 策略校验签名链并打印证书主体；只覆盖文件签名，不等于内核加载判定
+  - cmd: Get-AuthenticodeSignature {{driver}}
+    note: 快速查看签名状态与签署者，同样只覆盖文件本身
+  - cmd: bcdedit /enum {current}
+    note: 核对签名强制与测试模式开关，判断本机是否允许未签名驱动
+  pitfalls:
+  - 只查文件签名不查加载策略，会在启用安全启动或内存完整性的机器上误判为可加载
+  - 目录文件与文件签名是两层校验，忽略目录会出现签名有效但加载失败
+  - 签名策略随系统更新变化，结论必须连系统版本与配置一起记录
+- id: tech:driver-entry-device-object
+  name: 驱动入口与设备对象
+  name_en: Driver Entry & Device Objects
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 实现驱动入口，创建设备对象与符号链接，把分发例程挂到驱动对象上，使用户态能打开设备。难点是设备对象、符号链接与分发表的生命周期必须与卸载路径严格对称，错一步就留下悬空引用。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-toolchain-setup
+  - tech:driver-signing-policy
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 可加载并创建设备的驱动
+  - 分发例程表
+  - 设备与符号链接命名方案
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: '!drvobj \Driver\{{module}} 2'
+    note: 在调试器命令窗口执行，查看驱动对象与分发例程表，确认挂载是否生效
+  - cmd: '!object \Device'
+    note: 列出设备命名空间，判断设备对象是否真的创建成功
+  - cmd: sc start <服务名>
+    note: 以服务方式启动驱动；返回码能直接区分签名失败与入口例程返回失败
+  pitfalls:
+  - 先建设备再建符号链接的顺序不能反，链接失败时只删链接不删设备会残留对象
+  - 分发例程表里没覆盖的主功能码必须显式返回不支持并自行完成 IRP，交由系统处理会走未定义路径
+  - 设备名与符号链接名要考虑多实例，硬编码单名在第二次加载时直接冲突
+- id: tech:driver-irp-dispatch
+  name: IRP 分发与完成例程
+  name_en: IRP Dispatch & Completion
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 按主功能码分发 IRP，并决定同步完成、挂起到队列还是转发下层。难点是完成例程的返回值语义与中断级别约束：声明继续处理时不得提前完成，挂起后还必须实现取消路径。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 分发例程实现
+  - 挂起队列与取消路径
+  - IRP 生命周期核对结论
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: '!irpfind'
+    note: 在调试器里枚举当前所有 IRP，用于定位泄漏或被挂死后不再完成的请求
+  - cmd: dt nt!_IO_STACK_LOCATION
+    note: 查看 I/O 栈位置类型定义，确认该读哪个联合成员；不要凭外部资料猜偏移
+  - cmd: '!irp <IRP 地址>'
+    note: 展开单个 IRP 的栈位置与状态，地址取自上一步枚举输出
+  pitfalls:
+  - 完成例程返回继续处理却又调用了完成例程，属重复完成，现象通常是访问已释放内存
+  - 挂起 IRP 后不实现取消例程，用户态进程一退出请求就永久悬挂并拖住线程
+  - 在过高的中断级别上访问可分页内存会随机蓝屏，且只在压力下复现
+- id: tech:driver-ioctl-interface
+  name: IOCTL 接口与输入校验
+  name_en: IOCTL Interface & Input Validation
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 定义设备控制码与用户态通信协议，按缓冲方式把请求数据搬进内核并逐项校验。难点是不信任任何输入：长度、输出缓冲、调用者权限与并发重入都得自己挡，漏一处就是内核内存破坏。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-irp-dispatch
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 控制码定义表
+  - 输入与输出校验清单
+  - 用户态调用样例
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: x {{module}}!*Dispatch*
+    note: 在调试器里列出可疑的分发例程符号，确认控制码真正落在哪个函数
+  - cmd: dt nt!_IO_STACK_LOCATION
+    note: 确认设备控制相关参数成员的布局，再决定取哪几个字段
+  - cmd: dumpbin /headers {{driver}}
+    note: 静态确认映像是内核驱动而不是用户态 DLL，避免审错对象
+  pitfalls:
+  - 直接信任用户态传入的长度或指针等于把任意写交给调用者，必须自行校验范围并放在异常保护里访问
+  - 缓冲方式与长度字段语义不匹配时输出会越界，且只在特定对齐或长度下触发
+  - 缺调用者权限判定时普通用户即可触达本应管理员专用的控制码
+- id: tech:driver-kmdf-framework
+  name: 框架驱动对象模型
+  name_en: KMDF Object Model
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 用框架提供的对象、队列与上下文模型实现驱动，把 I/O 请求与电源事件交给框架调度。难点是框架状态机的契约：回调里能做什么、引用怎么取、何时可以阻塞，理解错通常表现为挂起而非蓝屏。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 框架驱动骨架
+  - 队列与上下文设计
+  - 电源与即插即用回调清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!wdfkd.wdfdriverinfo {{module}}'
+    note: 用调试器框架扩展查看驱动与框架对象状态；扩展不可用就退回 !drvobj 与 !object
+  - cmd: sc query <服务名>
+    note: 确认服务状态与退出码，框架初始化失败常在这里给出可读错误码
+  pitfalls:
+  - 在框架回调里阻塞等待一个没有别处会满足的条件，表现是超时或整机挂起
+  - 上下文清理回调里再访问设备对象，卸载路径上极易踩到已释放内存
+  - 队列的请求处置策略选错会让并发行为与设计不符，通常压测才暴露
+- id: tech:driver-verifier-testing
+  name: 驱动验证与压力测试
+  name_en: Driver Verifier Stress Testing
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 打开内核验证选项并施加压力，把潜伏的池越界、中断级别违规与资源泄漏提前暴露。难点是开启验证后分配布局与时序都变了，复现条件随之改变，必须先定位到具体被触发的检查项。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-toolchain-setup
+  - tech:driver-irp-dispatch
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 验证选项配置与复现步骤
+  - 被触发的检查项清单
+  - 崩溃转储与归因结论
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: verifier /standard /driver {{driver}}
+    note: 给指定驱动挂上标准验证项，重启后生效；只挂自家驱动，别全量挂
+  - cmd: verifier /querysettings
+    note: 确认当前真正生效的验证选项，避免以为开了其实没开
+  - cmd: '!verifier'
+    note: 在调试器里查看验证器统计与最近一次违规信息
+  - cmd: verifier /reset
+    note: 关闭全部验证并清除设置，系统起不来时的兜底动作
+  pitfalls:
+  - 全量挂验证会让系统极慢甚至无法启动，务必限定到单个驱动并预留快照
+  - 验证器报的第一现场未必是根因，池越界常常在释放时才被检出
+  - 开特殊池后内存布局改变，原本稳定复现的路径会消失，需要降压力重试
+- id: tech:driver-unload-cleanup
+  name: 卸载路径与资源回收
+  name_en: Unload Path & Resource Reclaim
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 在卸载例程里逆序释放设备、符号链接、队列、定时器与回调注册，确保没有残留引用。难点是卸载后仍有回调或工作项在跑，问题往往到重启或再次加载时才以访问已释放内存的形式出现。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-irp-dispatch
+  - tech:driver-verifier-testing
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 卸载顺序清单
+  - 残留引用与泄漏核对结果
+  - 反复加载卸载的稳定性结论
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: sc stop <服务名>
+    note: 触发卸载；返回码能区分还有引用无法卸载与卸载例程返回失败
+  - cmd: '!poolused 2'
+    note: 按标签统计池占用，反复加载卸载后对比就能看出泄漏
+  - cmd: lm
+    note: 确认模块是否真的从模块列表消失，残留说明卸载没走完
+  pitfalls:
+  - 卸载前不注销已注册的回调，回调指针会指向已卸载代码，之后任何触发都直接蓝屏
+  - 定时器与工作项只标记删除不等待完成，是典型的卸载后执行
+  - 反复加载卸载几十次再判定稳定，单次卸载成功说明不了问题

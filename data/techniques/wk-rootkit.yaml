@@ -1,0 +1,254 @@
+# BinAtlas 知识库 · 技术 · dom:wk-rootkit
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:ssdt-hook-detection
+  name: 服务分发表钩子检测
+  name_en: Service Dispatch Table Hook Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测系统服务分发表被改写以重定向系统调用的手法，包括整表替换与表项替换。难点是表位于受保护结构里且合法安全产品也会改写，判断只能靠与干净映像比对，不能只看指针落在哪。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 表项与映像的差异清单
+  - 可疑重定向结论
+  - 合法改写的排除依据
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: '!chkimg nt'
+    note: 对比内核映像的代码差异，用于发现被重定向的入口
+  - cmd: '!object \ObjectTypes'
+    note: 先确认对象类型基线，排除只是类型布局差异造成的误判
+  - cmd: lm
+    note: 核对系统模块加载范围，判断重定向目标落点
+  pitfalls:
+  - 表项地址落在内核映像范围外不一定是恶意，热补丁与安全产品也会这样
+  - 只比对代码段差异，整表被替换到别处的做法不体现在差异里
+  - 比对基准取自被感染的机器，差异自然是零
+- id: tech:inline-hook-detection
+  name: 内联钩子检测
+  name_en: Inline Hook Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测函数序言被跳转指令覆盖的内联钩子，并还原被覆盖的原始指令。难点是必须有可信的原始副本做比对，而合法热补丁与安全产品同样会改写同一批函数，形态上几乎无法区分。
+  difficulty: 4
+  prerequisites:
+  - tech:ssdt-hook-detection
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:pe64
+  outputs:
+  - 被改写函数清单
+  - 原始指令还原结果
+  - 跳转目标归属判定
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: u {{module}}!<函数名>
+    note: 反汇编函数开头，确认序言是否被跳转覆盖
+  - cmd: '!chkimg nt'
+    note: 批量比对代码差异，比逐个函数反汇编快得多
+  - cmd: dps <地址> L20
+    note: 顺跳转目标查看附近指针，判断劫持去向
+  pitfalls:
+  - 短跳转与热补丁都在序言写字节，形态相似，只看前几个字节会误判
+  - 参考映像版本与被测机器不一致，差异里混入大量版本噪声
+  - 改写可能只在特定条件成立时生效，静态比对看不到
+- id: tech:idt-dpc-chain-audit
+  name: 中断与 DPC 链审计
+  name_en: Interrupt & DPC Chain Audit
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 审计中断描述符与延迟过程调用链是否被替换或插入，识别在中断层介入的手法。难点是这些结构受完整性校验保护且按处理器分布，误报与漏报大多来自只看单个处理器。
+  difficulty: 5
+  prerequisites:
+  - tech:inline-hook-detection
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 中断描述符与处理例程对照表
+  - 各处理器差异清单
+  - 可疑插入项结论
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!idt'
+    note: 列出中断描述符与处理例程，逐项核对是否落在系统模块范围内
+  - cmd: '!dpcs'
+    note: 查看当前处理器上的延迟过程调用队列；换处理器要先切换上下文，该扩展在不同调试器版本可用性不一
+  - cmd: lm
+    note: 核对处理例程落点所属模块
+  pitfalls:
+  - 只查一个处理器，其他处理器上的改写会漏掉
+  - 处理例程落在第三方模块内不一定异常，安全与虚拟化产品会介入中断路径
+  - 队列是动态的，抓取时机不同结果差异很大
+- id: tech:driver-object-chain-audit
+  name: 驱动对象链审计
+  name_en: Driver Object Chain Audit
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 审计驱动对象与设备对象链的一致性，发现被摘链却仍能运行的驱动，或只有设备没有驱动记录的残留。难点是摘链后对象继续存活，单看任一链表都会得出干净的错误结论。
+  difficulty: 4
+  prerequisites:
+  - tech:object-manager-namespace
+  - tech:object-reference-tracking
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 驱动与设备对应表
+  - 链间不一致项清单
+  - 可疑残留结论
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: '!object \Driver'
+    note: 枚举驱动对象命名空间；未命名驱动不在其中
+  - cmd: '!object \Device'
+    note: 枚举设备对象，与驱动列表比对找无主设备
+  - cmd: lm
+    note: 与模块列表三方比对，三者不一致才是较可靠的信号
+  pitfalls:
+  - 未命名对象天然不出现在命名空间里，把缺失当摘链会大量误报
+  - 驱动对象与模块加载是两套记录，改了一方另一方可能仍正常
+  - 卸载过程中的短暂不一致属正常，抓取时机要避开卸载窗口
+- id: tech:module-unlink-detection
+  name: 模块链摘除检测
+  name_en: Module Unlink Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测驱动从已加载模块链被摘除后继续运行的手法，需靠内存扫描或回调引用反查隐藏模块。难点是被摘除模块不再出现在任何枚举接口里，只能靠残留指针与内存特征去捞，误报率天然偏高。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-object-chain-audit
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  - art:driver
+  outputs:
+  - 隐藏模块候选清单
+  - 捞取依据与证据
+  - 与枚举结果的差异说明
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: lm
+    note: 取当前枚举基线，作为应该看到什么的参照
+  - cmd: '!poolused 2'
+    note: 找异常增长的模块相关池占用，隐藏模块仍然占着内存
+  - cmd: '!pte <候选基址>'
+    note: 确认候选地址是否为有效可执行映射，排除把数据页当模块
+  pitfalls:
+  - 内存里搜到的映像特征可能来自合法缓存或映射文件，需结合可执行属性判断
+  - 摘除只影响一条链，其他记录里可能仍留痕迹，只查一条链必然漏
+  - 反查要读大量内存，操作不当会把目标机直接拖死
+- id: tech:callback-chain-concealment
+  name: 回调链隐藏检测
+  name_en: Callback Chain Concealment Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测回调注册链被摘除或伪造以隐藏自身的手法，判据是回调集合、模块加载状态与事件实际行为之间的矛盾。难点是合法卸载与恶意摘除在集合变化上完全一致，必须补行为侧证据。
+  difficulty: 5
+  prerequisites:
+  - tech:callback-integrity-audit
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 回调集合差异结论
+  - 行为与注册不符的证据
+  - 隐藏手法判定
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!object \Callback'
+    note: 取回调对象快照，与基线对比
+  - cmd: dt nt!_EX_CALLBACK*
+    note: 通配确认类型定义，避免用错结构解读
+  - cmd: lm
+    note: 核对回调所属模块是否仍加载
+  pitfalls:
+  - 回调集合本身枚举不全，列表里没有不能直接当隐藏
+  - 行为侧证据要主动触发事件，生产环境不宜频繁触发
+  - 伪装成合法安全产品注册的回调，注册信息本身完全正常
+- id: tech:boot-stage-persistence-audit
+  name: 引导级持久化审计
+  name_en: Boot Stage Persistence Audit
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 审计在内核加载之前介入的持久化位置：引导配置项、引导管理器组件与固件设置，识别绕过内核层检测的驻留。难点是这类改动在操作系统内看不到完整证据，必须靠启动配置与固件状态交叉核对。
+  difficulty: 5
+  prerequisites:
+  - tech:module-unlink-detection
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:pe64
+  outputs:
+  - 引导配置差异清单
+  - 可疑引导组件
+  - 固件层核对结论
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: bcdedit /enum all
+    note: 导出全部启动项与引导配置，异常项常藏在不常用的条目里
+  - cmd: '!sysinfo machineid'
+    note: 在调试器里查看机器与固件标识，辅助确认引导方式
+  - cmd: wevtutil qe System /c:50 /rd:true /f:text
+    note: 读系统日志找引导阶段的异常记录
+  pitfalls:
+  - 只看当前启动项，备用启动项与其他引导条目里的改动会被忽略
+  - 引导级改动可能同时修改固件设置，只在操作系统侧检查必然不全
+  - 引导阶段日志可能来不及落盘，缺失记录不等于没发生
+- id: tech:integrity-check-cost-analysis
+  name: 完整性校验对抗代价
+  name_en: Integrity Check Countermeasure Cost
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 量化绕过周期性完整性校验要付的代价：需要同时处理校验器、受校验结构与校验时序，以及方案自身留下的痕迹。难点是任何绕过都扩大攻击面，而校验项与周期既不公开也不固定。
+  difficulty: 5
+  prerequisites:
+  - tech:idt-dpc-chain-audit
+  - tech:module-unlink-detection
+  - tech:callback-chain-concealment
+  - tech:patchguard-constraint-analysis
+  - tech:exploit-behavior-detection
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 代价与可行性评估
+  - 可观测痕迹清单
+  - 检测方视角的判据
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!analyze -v'
+    note: 校验被触发时以固定错误码出现，据此确认对抗是否已被发现
+  - cmd: '!chkimg nt'
+    note: 确认内核代码段是否被改写
+  - cmd: lm
+    note: 核对加载模块，判断是否有额外组件参与校验
+  pitfalls:
+  - 用固定周期估算窗口，随机化让实际窗口与估算差一个量级
+  - 只处理结构校验不管代码校验，两类校验触发条件不同
+  - 绕过方案引入的组件本身成了新的可检测对象

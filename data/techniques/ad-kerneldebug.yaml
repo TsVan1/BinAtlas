@@ -1,0 +1,239 @@
+# BinAtlas 知识库 · 技术 · dom:ad-kerneldebug
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:kernel-dual-machine-debugging
+  name: 双机内核调试
+  name_en: Dual-Machine Kernel Debugging
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 用另一台主机通过串口或网络接管目标机的内核调试通道，在内核态下断与读结构。难点是启动早期的断点必须先把调试通道建立好。
+  difficulty: 5
+  prerequisites: []
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  outputs:
+  - 可断下的内核调试会话
+  - 目标机调试通道配置
+  - 内核态结构读取结果
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: bcdedit /debug on
+    note: 开启当前启动项的内核调试开关，重启后生效
+  - cmd: bcdedit /dbgsettings serial debugport:1 baudrate:115200
+    note: 把调试通道设为串口一，波特率必须与宿主机端完全一致
+  - cmd: bcdedit /dbgsettings net hostip:192.168.1.10 port:50001 key:1.2.3.4
+    note: 改用网络通道，端口与密钥需与宿主机侧一致，密钥四段每段不能为 0
+  - cmd: windbg -k net:port=50001,key=1.2.3.4
+    note: 宿主机侧按相同端口与密钥连接目标机
+  pitfalls:
+  - 内核调试开关打开后系统超时与调度行为会改变，用这样的目标机测时延类行为会得到失真结论
+  - 串口通道最容易踩波特率与流控不一致，表现是连接成功但完全没有输出
+  references:
+  - https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/
+- id: tech:kernel-local-debugging
+  name: 本地内核调试
+  name_en: Local Kernel Debugging
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 在同一台机器上用调试器直接读内核内存与结构，不需要第二台主机。难点是能力受限：不能在内核执行中下断，只能做运行时只读观察。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-dual-machine-debugging
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 内核对象与驱动的现场快照
+  - 内核符号解析结果
+  - 受限能力的边界清单
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: bcdedit /dbgsettings local
+    note: 把调试配置切换成本地模式，重启后生效
+  - cmd: windbg -kl
+    note: 以本地内核调试方式连接，进入后只能观察而不能真正停住内核
+  pitfalls:
+  - 本地调试无法在内核执行流上下断点，动态行为验证必须回到双机模式
+  - 同一时间只允许一个内核调试器连接，残留会话会占用调试对象导致新连接失败
+- id: tech:kernel-symbol-resolution
+  name: 内核符号解析
+  name_en: Kernel Symbol Resolution
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 为内核模块与驱动加载匹配的符号，让栈回溯与结构偏移可读。难点是版本与编译号必须精确对应，符号错配会让所有结构字段整体偏移。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-dual-machine-debugging
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 可用的符号路径配置
+  - 精确匹配的模块符号表
+  - 结构体字段偏移
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: windbg -y "srv*C:\symbols*https://msdl.microsoft.com/download/symbols" -k
+      net:port=50001,key=1.2.3.4
+    note: 启动时指定符号服务器与本地缓存目录，避免连上后每个模块都缺符号
+  - cmd: symchk /r {{driver}} /s srv*C:\symbols*https://msdl.microsoft.com/download/symbols
+    note: 离线校验驱动的符号文件是否与二进制严格匹配，不匹配就不要继续分析
+  - cmd: modinfo {{binary}} | grep vermagic
+    note: Linux 模块核对编译版本串，与运行内核不一致时结构偏移会全部错位
+  pitfalls:
+  - 符号与内核编译号差一位，字段偏移就全错，表现为读到看似合理但无意义的值
+  - 网络受限时符号服务器超时会让会话启动极慢，应预先离线缓存符号文件
+- id: tech:kernel-driver-load-breakpoints
+  name: 驱动加载期断点
+  name_en: Driver Load Breakpoints
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 在驱动被加载的时刻中断，赶在其初始化完成前拿到控制权。难点是加载时机早于许多用户态组件就绪，错过就得等下一次重启。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-dual-machine-debugging
+  - tech:kernel-symbol-resolution
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 驱动入口处的停止现场
+  - 加载顺序与依赖关系
+  - 初始化阶段的参数与设备对象
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: sxe ld:{{driver}}
+    note: 调试器会话内执行：指定模块加载时中断，模块名不带扩展名
+  - cmd: driverquery /v /fo csv
+    note: 先确认驱动的加载类型与启动方式，引导启动的驱动要改在引导调试阶段处理
+  pitfalls:
+  - 引导阶段加载的驱动在系统启动早期就完成初始化，用户态调试器介入时早已错过
+  - 断在加载路径里再下新断点可能因重入而失效，应在模块映射后立刻用未解析断点占位
+- id: tech:kernel-breakpoint-management
+  name: 内核断点管理
+  name_en: Kernel Breakpoint Management
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 在内核地址上布置软件与硬件断点并管理命中后的恢复。难点是内核代码页被完整性机制关注，断点残留会引发整机异常。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-resolution
+  - tech:kernel-driver-load-breakpoints
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 内核断点清单与命中记录
+  - 断点对系统稳定性的影响评估
+  - 结构体字段的实际取值
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: bp nt!NtCreateFile
+    note: 调试器会话内执行：在系统调用入口下软件断点，命中后可读参数
+  - cmd: ba e1 nt!NtCreateFile
+    note: 调试器会话内执行：改为硬件执行断点，不写内核代码页，适合完整性敏感环境
+  - cmd: bl
+    note: 调试器会话内列出全部断点并核对状态，防止断点残留
+  pitfalls:
+  - 软件断点会把断点指令写进内核代码页，若目标环境有内核完整性校验，可能直接触发整机崩溃
+  - 命中时若处于中断上下文或持有自旋锁，继续执行代价很高，容易引发超时或死锁
+- id: tech:kernel-crash-dump-analysis
+  name: 崩溃转储分析
+  name_en: Kernel Crash Dump Analysis
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 从整机或内核转储里还原崩溃现场，定位驱动与调用链。难点是转储只有内存没有符号，转储类型决定了能看到多少信息。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-breakpoint-management
+  artifacts:
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 崩溃点与故障指令
+  - 涉及的驱动与调用链
+  - 内存中的可疑对象
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: windbg -z {{binary}} -c "!analyze -v; q"
+    note: 把转储文件当输入自动分析，命令跑完即退出，便于批处理
+  - cmd: dumpchk {{binary}}
+    note: 先校验转储文件是否完整，避免分析到一半才发现文件被截断
+  pitfalls:
+  - 小内存转储只保留崩溃线程栈与少量对象，想看内核堆必须改配更大转储并复现
+  - 转储里的模块基址与线上不一致（地址随机化与热补丁），按静态地址对符号会得到错误函数
+- id: tech:linux-kgdb-remote-debugging
+  name: Linux 内核远程调试
+  name_en: Linux Kernel Debugging with kgdb
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 通过串口或虚拟机调试桩把内核交给外部调试器，用内核映像符号断进函数。难点是断点会停住整机，网络与时钟随之冻结，判断窗口很窄。
+  difficulty: 5
+  prerequisites: []
+  artifacts:
+  - art:kernel-module
+  - art:firmware-image
+  outputs:
+  - 内核函数级断点现场
+  - 内核数据结构取值
+  - 整机冻结时的外设状态
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: echo ttyS0,115200 > /sys/module/kgdboc/parameters/kgdboc
+    note: 把内核调试桩绑到串口，波特率需与外部调试器一致
+  - cmd: echo g > /proc/sysrq-trigger
+    note: 主动让内核进入调试桩等待外部连接，执行后整机停住
+  - cmd: gdb {{binary}} -ex "target remote /dev/ttyUSB0"
+    note: 用带调试符号的内核映像作符号源，通过串口连接调试桩
+  pitfalls:
+  - 断住内核时整机停摆，靠时钟推进的看门狗会在恢复后立刻触发，实验机应关掉这类定时器
+  - 符号与运行内核版本不一致时函数地址全部错位，调试器只会给出看似正常的错栈
+  references:
+  - https://www.kernel.org/doc/html/latest/dev-tools/kgdb.html
+- id: tech:linux-kernel-dynamic-tracing
+  name: 内核动态追踪
+  name_en: Linux Kernel Dynamic Tracing
+  domain:
+  - dom:ad-kerneldebug
+  parent: dom:ad-kerneldebug
+  def: 用内核自带的追踪设施挂探针观察函数与参数，不停机也不改目标代码。难点是探针有开销与数量上限，事件量过大时会丢样本。
+  difficulty: 3
+  prerequisites:
+  - tech:linux-kgdb-remote-debugging
+  artifacts:
+  - art:kernel-module
+  - art:elf64
+  outputs:
+  - 内核函数调用与参数记录
+  - 事件时间线与耗时分布
+  - 无停机条件下的行为证据
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: echo "p:probe_open do_sys_open" >> /sys/kernel/debug/tracing/kprobe_events
+    note: 注册一个内核探针事件，挂到指定内核函数入口
+  - cmd: echo 1 > /sys/kernel/debug/tracing/events/kprobes/probe_open/enable
+    note: 打开刚注册的事件，之后的行为都会记入追踪缓冲区
+  - cmd: cat /sys/kernel/debug/tracing/trace_pipe
+    note: 实时读取追踪输出，事件多时优先用管道而不是整份缓冲区
+  pitfalls:
+  - 探针挂在热路径上会让系统整体变慢，输出量还会把环形缓冲区冲掉，必须用过滤条件收窄
+  - 内核函数被内联或改名后探针注册失败，符号名要以运行内核的导出表为准
+  references:
+  - https://www.kernel.org/doc/html/latest/trace/kprobetrace.html

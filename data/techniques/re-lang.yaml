@@ -1,0 +1,269 @@
+# BinAtlas 知识库 · 技术 · dom:re-lang
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:dotnet-metadata-recovery
+  name: 托管元数据与指令还原
+  name_en: Managed Metadata & IL Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 还原托管程序集的类型、方法与中间语言指令，进入字节码层理解逻辑。难点是元数据表可被篡改或整体加密，条目错乱会让反编译只出一半。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe-dotnet
+  - art:jar
+  outputs:
+  - 类型与方法清单
+  - 可读的中间语言或反编译源码
+  - 元数据异常项清单
+  - 需进一步还原的入口点
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: monodis --output={{out}} {{binary}}
+    note: 导出完整中间语言；不依赖符号即可用，适合先拿全貌
+  - cmd: ilspycmd -o {{out}} {{binary}}
+    note: 直接出工程级源码，比读中间语言快；失败通常说明元数据被动过
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d.find(b\"BSJB\"))"
+      {{binary}}
+    note: 找元数据签名，确认托管头存在且元数据区位置正常
+  pitfalls:
+  - 保护方案会加密元数据，反编译器只输出空壳类，问题在元数据不在指令
+  - 混合模式程序集的原生部分不在中间语言里，只看托管层会漏关键逻辑
+  - 混淆后类型名可能是不可见字符，别按名字判断用途
+  - 单文件发布把程序集打包进原生宿主，直接反编译宿主得不到业务代码
+- id: tech:dotnet-obfuscation-normalization
+  name: 托管混淆归一化
+  name_en: Managed Obfuscation Normalization
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 消除标识符重命名、字符串加密与控制流平坦化，恢复可读的托管代码。难点是多种混淆可叠加，且部分保护会主动破坏反编译器的元数据解析。
+  difficulty: 3
+  prerequisites:
+  - tech:dotnet-metadata-recovery
+  artifacts:
+  - art:pe-dotnet
+  outputs:
+  - 去混淆后的程序集
+  - 解密出的字符串表
+  - 混淆器与手法清单
+  - 无法自动恢复的残留项
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: de4dot {{binary}}
+    note: 自动识别并去除常见混淆；产物默认写在当前目录，先备份原件
+  - cmd: ilspycmd -o {{out}} {{binary}}
+    note: 每轮处理后重新反编译，对比可读性变化判断是否真有效
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print([s for s in
+      [b\"ConfusedBy\",b\"Babel\"] if s in d])" {{binary}}
+    note: 在文件里找混淆器残留标识，作为选路线的依据
+  pitfalls:
+  - 去混淆失败时工具仍可能输出文件，看起来成功但内容没变，必须复核
+  - 某些混淆把指令改成不可验证形式，处理后仍需手工修才能反编译
+  - 字符串解密常依赖运行期初始化的密钥，静态处理拿不到全部明文
+  - 处理过的程序集签名失效，强命名校验场景下加载会直接失败
+- id: tech:symbol-demangling
+  name: 符号修饰还原
+  name_en: Symbol Demangling
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 把编译器生成的修饰名还原成可读的命名空间、类与函数签名。难点是不同编译器与语言的修饰规则不同，残缺或截断的修饰名无法唯一反解。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  outputs:
+  - 还原后的可读符号名
+  - 编译器族与语言推断
+  - 无法反解的残缺修饰名清单
+  - 同名不同实现的去重结果
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: nm -C {{binary}}
+    note: 多数工具链可直接还原修饰名，先看能还原多少
+  - cmd: nm {{binary}} | c++filt
+    note: 显式过一遍该类解码器，能处理未覆盖的变体
+  - cmd: nm {{binary}} | rustfilt
+    note: 另一种语言的修饰名需要专门解码器，混编产物里两种都要试
+  pitfalls:
+  - 修饰名被截断成前缀后无法唯一反解，强行还原会得到错误签名
+  - 不同编译器对同一符号生成的修饰名不同，按格式判定语言并不可靠
+  - 模板实例展开后名字极长，可读性提升不代表找到了对应源码
+  - 混淆器会生成形似修饰名的假名字，看起来像合法命名但并不符合规则
+- id: tech:go-symbol-recovery
+  name: Go 产物符号与结构还原
+  name_en: Go Artifact Symbol Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 利用运行时元数据表恢复函数名、类型信息与包路径，重建调用关系。难点是符号被剥离后元数据仍在，但要按运行时版本定位其结构。
+  difficulty: 3
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:mach-o
+  outputs:
+  - 恢复的函数名与包路径清单
+  - 类型与方法信息
+  - 运行时版本判定
+  - 调用关系草图
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: go version -m {{binary}}
+    note: 直接读出构建信息与依赖模块，是最省力也最可靠的入口
+  - cmd: go tool nm {{binary}} | head -50
+    note: 符号表即使被处理过也可能有残留，先确认还有没有名字
+  - cmd: strings -a {{binary}} | grep -E "^go1\.[0-9]+" | head
+    note: 版本字符串决定元数据布局，版本不同表结构不同
+  pitfalls:
+  - 这类产物通常不剥离符号，一旦剥离常连带删掉元数据，只能靠特征串恢复
+  - 版本差异导致元数据布局不同，用错版本的解析器会读出乱码名字
+  - 泛型实例化后函数名带类型参数修饰，直接按包名检索容易漏
+  - 内联与闭包改写会让符号对应的函数体与源码形态差异较大
+- id: tech:rust-artifact-identification
+  name: Rust 产物识别与符号还原
+  name_en: Rust Artifact Identification
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 从恐慌字符串、修饰名与内存布局特征确认语言产物并还原符号。难点是默认发布构建剥离符号且大量内联，可用的语言特征只剩间接痕迹。
+  difficulty: 4
+  prerequisites:
+  - tech:binary-triage-metadata
+  - tech:symbol-demangling
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:mach-o
+  outputs:
+  - 语言与构建模式判定
+  - 还原的函数路径与模块名
+  - 依赖库推断
+  - 不可恢复区域说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: strings -a {{binary}} | grep -Ei "panicked at|cargo/registry|rustc" | head
+    note: 恐慌信息与构建路径是最常见的语言指纹
+  - cmd: nm -C {{binary}} | head -50
+    note: 带修饰名的符号可直接看出模块路径，未剥离时优先用这个
+  - cmd: nm {{binary}} | rustfilt | head -50
+    note: 用专用解码器还原修饰名，比手工解析可靠
+  pitfalls:
+  - 两类语言的修饰名形态不同但都可被截断，符号残缺时无法反解
+  - 剥离符号后差异只剩恐慌路径与展开结构，结论只能是概率判断
+  - 泛型与迭代器链会展开成巨量内联代码，函数级边界极难划定
+  - 静态链接 C 运行库后无法按依赖区分语言，别把运行库特征算成语言特征
+- id: tech:e-language-recovery
+  name: 易语言产物还原
+  name_en: E-Language Artifact Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 识别国内某类中文编程语言的编译产物，还原其运行库依赖与特有调用形态。难点是公开资料少且编译特征弱，多数判断依赖字符串与库调用模式。
+  difficulty: 4
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 产物判定依据
+  - 依赖的支持库清单
+  - 关键子程序与调用关系
+  - 不确定项说明
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: strings -el {{binary}} | head -60
+    note: 该语言的字符串多为宽字符编码，用宽字符模式提取才看得到
+  - cmd: rabin2 -zz {{binary}} | grep -Ei "krnln|fnr|e\.lib" | head
+    note: 支持库名与扩展库文件名是最强的判定依据
+  - cmd: objdump -d --no-show-raw-insn {{binary}} | grep -c "call"
+    note: 粗看调用密度；大量经运行时库转发时调用形态偏单一
+  pitfalls:
+  - 宽字符与单字节字符串混杂，只用单字节提取会漏掉大部分可读信息
+  - 加保护后支持库名会被加密，静态看不到名字不代表不是该语言产物
+  - 国内同类语言产物特征相近，仅凭字符串判定容易误判
+  - 该语言调用惯例与常见约定不同，按标准约定还原参数会整体错位
+- id: tech:managed-native-interop-mapping
+  name: 托管原生互操作映射
+  name_en: Managed-Native Interop Mapping
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 还原托管层与原生层的边界：声明、导出绑定与数据封送方式。难点是边界处类型被双向转换，参数形态在两侧并不一致。
+  difficulty: 3
+  prerequisites:
+  - tech:dotnet-metadata-recovery
+  artifacts:
+  - art:pe-dotnet
+  - art:so
+  - art:dex
+  - art:apk
+  outputs:
+  - 托管到原生的绑定表
+  - 封送类型与宽度对照
+  - 原生侧实现入口清单
+  - 边界处的数据转换说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: monodis --method {{binary}} | grep -i "pinvokeimpl"
+    note: 外部调用声明会带标记，直接给出目标原生函数名
+  - cmd: rabin2 -i {{apk}}
+    note: 移动侧先看原生库与导入，绑定注册在原生库导出里能找到线索
+  - cmd: nm -D {{binary}}
+    note: 原生库侧看导出名，与托管侧声明对齐
+  pitfalls:
+  - 动态注册的绑定方法不出现在导出表里，只能搜注册函数调用
+  - 封送会改变参数宽度与生命周期，两侧签名不能直接对照
+  - 同名导出可能被多个托管声明共用，绑定关系不是一对一
+  - 混淆后原生方法名被抹改，按名字匹配会全部落空
+- id: tech:interpreter-bytecode-recovery
+  name: 脚本产物字节码还原
+  name_en: Script Artifact Bytecode Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 从打包后的解释器程序中提取业务字节码并还原到源码级可读形态。难点是解释器可能被定制或加密，标准反编译工具对不上版本。
+  difficulty: 4
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:script
+  - art:elf64
+  - art:pe64
+  - art:document
+  outputs:
+  - 提取出的字节码或脚本片段
+  - 解释器与版本判定
+  - 还原后的源码级逻辑
+  - 版本不匹配点说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: strings -a {{binary}} | grep -Ei "python|PyInstaller|lua|autoit" | head
+    note: 先确认内嵌的是哪种解释器及其版本线索
+  - cmd: binwalk {{binary}}
+    note: 按签名切出内嵌归档或压缩段，再单独处理
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d.find(b\"PYZ\"),
+      d.find(b\"MEI\"))" {{binary}}
+    note: 定位打包产物的归档区偏移，是提取字节码的第一步
+  pitfalls:
+  - 打包工具与提取工具版本必须匹配，版本不符时提取出的字节码无法反编译
+  - 字节码可能被二次加密，提取成功不等于能反编译
+  - 单文件打包会把依赖一起塞进去，切分边界靠签名猜容易切坏
+  - 定制解释器的指令集被改过，标准反编译器会静默输出错误指令

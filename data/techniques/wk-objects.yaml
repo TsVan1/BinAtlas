@@ -1,0 +1,246 @@
+# BinAtlas 知识库 · 技术 · dom:wk-objects
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:object-manager-namespace
+  name: 对象命名空间分析
+  name_en: Object Namespace Analysis
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 沿对象管理器的目录树定位设备、驱动、回调等命名对象，理解符号链接如何把路径映射到真实对象。难点是同一对象可能有多个名字入口，判断谁在用它必须回到对象头的引用与句柄。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 命名路径与对象对应表
+  - 符号链接映射关系
+  - 对象引用来源清单
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \'
+    note: 从命名空间根开始逐层展开；路径分隔符与大小写要与输出保持一致
+  - cmd: '!object \ObjectTypes'
+    note: 列出对象类型与数量，用于判断某类对象是否异常增多
+  - cmd: '!drvobj \Driver\{{module}} 2'
+    note: 由名字定位驱动对象并展开分发例程表
+  pitfalls:
+  - 把符号链接名当成真实对象名，会在错误层级找不到对象
+  - 未命名对象不出现在命名空间里，只按名字枚举会漏掉大量真实对象
+  - 同名设备在不同会话或不同实例下可以有多个，看到第一个就下结论容易错
+- id: tech:eprocess-field-recovery
+  name: 进程结构字段还原
+  name_en: EPROCESS Field Recovery
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 在进程结构中定位名称、父进程、令牌、线程链与保护状态等字段，并给每个字段找到可验证的证据。难点是字段随版本增删重排，硬编码偏移只在单一构建上成立，跨版本必须重新确认。
+  difficulty: 4
+  prerequisites:
+  - tech:object-manager-namespace
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 字段与偏移映射表
+  - 每个字段的验证方式
+  - 跨版本差异记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: dt nt!_EPROCESS
+    note: 把符号给出的类型定义作为唯一偏移来源，不要用外部资料里的旧偏移
+  - cmd: '!process 0 0'
+    note: 取得进程结构地址，再配合类型化视图观察具体实例
+  - cmd: dt nt!_EPROCESS <地址>
+    note: 打印实例字段值，用名称或父进程这类可比对项验证解读是否正确
+  pitfalls:
+  - 抄一份网上的偏移表直接用，构建号一变就全错，而且错得很安静
+  - 字段存在不代表语义如你所想，必须用行为或已知值做交叉验证
+  - 结构内的联合成员在不同配置下复用同一空间，读到的值可能是另一种解释
+- id: tech:handle-table-walk
+  name: 句柄表遍历
+  name_en: Handle Table Walk
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 从进程的句柄表还原句柄值到对象的映射，判断某进程实际持有哪些内核资源。难点是句柄表分层且句柄值经过编码，句柄存在也不等于对象可被不受限地使用。
+  difficulty: 4
+  prerequisites:
+  - tech:eprocess-field-recovery
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 句柄与对象类型对照表
+  - 授予权限位解读
+  - 可疑句柄清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!handle 0 f Process'
+    note: 列出所有进程类句柄及引用计数，先看总量再看单点
+  - cmd: '!object \ObjectTypes'
+    note: 确认对象类型名，避免把类型索引当成类型名
+  - cmd: dt nt!_HANDLE_TABLE
+    note: 查看句柄表结构定义，分层与编码方式以符号输出为准
+  pitfalls:
+  - 只统计句柄数量不看授予的访问权限，会把受限句柄误判为完全控制
+  - 句柄值不是数组下标，按偏移直接寻址会读到无关对象
+  - 进程退出过程中句柄表正在拆解，此时遍历会得到自相矛盾的结果
+- id: tech:object-reference-tracking
+  name: 对象引用计数追踪
+  name_en: Object Reference Tracking
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 追踪内核对象引用计数的增减来源，判断是引用泄漏还是正常缓存。难点是增减点分散在系统与第三方驱动里，泄漏要到对象耗尽才暴露，事后回溯需要完整时间线而非单点快照。
+  difficulty: 5
+  prerequisites:
+  - tech:object-manager-namespace
+  - tech:handle-table-walk
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 引用增减点清单
+  - 泄漏归因结论
+  - 观测与复现方案
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!object <对象地址>'
+    note: 查看对象的类型、名称与引用相关信息，地址来自命名空间或池枚举
+  - cmd: '!poolfind <标签>'
+    note: 找出同标签对象块，批量对比能看出数量是否随操作单调增长
+  - cmd: '!poolused 2'
+    note: 观察对象相关池占用的增长趋势，判断是泄漏还是缓存
+  pitfalls:
+  - 引用归零后的对象仍可能可读一段时间，读到看起来正常的内容会误导判断
+  - 把临时持有当泄漏，必须看多次操作后的净增长而不是单次快照
+  - 引用追踪需要提前开启，问题发生后再想补开拿不到历史增减点
+- id: tech:undocumented-layout-recovery
+  name: 未公开结构布局还原
+  name_en: Undocumented Layout Recovery
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 在只有部分类型信息时还原结构布局：靠字段访问模式、常量比对与对齐规则推断成员位置与大小。难点是每种假设都必须能被证伪，单看一处访问模式很容易把填充或复用空间当成真成员。
+  difficulty: 5
+  prerequisites:
+  - tech:eprocess-field-recovery
+  artifacts:
+  - art:memory-dump
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 结构布局草案
+  - 每个成员的证据
+  - 待验证假设清单
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: dt nt!_EPROCESS
+    note: 先用已知结构建立基线，再对照未知结构的访问模式
+  - cmd: x nt!*Eprocess*
+    note: 列出相关符号；未导出例程的符号有时能反推成员用途
+  - cmd: dps <地址> L40
+    note: 观察指针密集区域，判断哪些位置确实存放地址
+  pitfalls:
+  - 把对齐填充当成字段，会让后续所有偏移推断整体串位
+  - 结构常被内联或复制进别的结构，只在一种上下文验证会得出片面结论
+  - 单版本推断出的布局不能跨构建复用，必须标注适用版本
+- id: tech:pool-tag-attribution
+  name: 池标签归属分析
+  name_en: Pool Tag Attribution
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 用池标签把内核分配归到具体组件，判断内存增长来自哪一方。难点是标签由分配方自定义且常被复用，归属只能当线索，最终仍要靠调用栈或模块范围确认。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-pool-forensics
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 标签到组件的候选映射
+  - 增长异常的标签清单
+  - 归属确认证据
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: '!poolused 2'
+    note: 按标签排序查看池占用，先锁定异常放大的标签
+  - cmd: '!poolfind <标签>'
+    note: 枚举该标签下全部池块；四字符且区分大小写
+  - cmd: lm
+    note: 结合已加载模块范围判断标签可能属于谁
+  pitfalls:
+  - 同一标签常被多个组件使用，按标签直接指认元凶会误伤
+  - 标签统计包含已释放未归还的区块，增长不等于泄漏
+  - 开验证选项后区块布局改变，文件里记录的大小需要重算
+- id: tech:token-privilege-inspection
+  name: 令牌与特权检查
+  name_en: Token Privilege Inspection
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 读取进程或线程令牌里的身份、组成员、特权位与完整性级别，判断实际权限而不是账户名。难点是进程与线程各持一份令牌，特权还有已授予与已启用之分，看错一项结论就反了。
+  difficulty: 4
+  prerequisites:
+  - tech:eprocess-field-recovery
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 令牌内容解读
+  - 特权启用状态结论
+  - 实际权限边界判定
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: '!token'
+    note: 不带参数时显示当前进程令牌；重点看特权是已授予还是已启用
+  - cmd: dt nt!_TOKEN
+    note: 查看令牌结构定义，确认特权与完整性级别字段的当前命名
+  - cmd: whoami /priv
+    note: 在目标系统上取用户态视角的特权列表，与内核侧解读互相印证
+  pitfalls:
+  - 只看组成员不看完整性级别，会把受限的管理员当成完全权限
+  - 特权已授予不等于已启用，提权判断必须看启用位
+  - 线程可以临时替换令牌，只读进程令牌会漏掉正在生效的那一份
+- id: tech:kernel-address-space-mapping
+  name: 内核地址空间布局
+  name_en: Kernel Address Space Layout
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 确定内核各区域的实际范围与映射关系：映像区、池区、页表与超空间，判断某个地址属于哪一类。难点是基址每次启动随机化、区域边界随架构与启动配置变化，只能实测不能背固定值。
+  difficulty: 4
+  prerequisites:
+  - tech:undocumented-layout-recovery
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 地址区间划分结论
+  - 关键基址与模块范围
+  - 地址归属判定方法
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: lm
+    note: 列出已加载模块的起止范围，先建立映像区的事实基线
+  - cmd: '!vm'
+    note: 查看内核虚拟内存各分区统计，区域划分以该输出为准
+  - cmd: '!pte <地址>'
+    note: 查地址对应的页表项，判断是否有效映射及其权限
+  pitfalls:
+  - 背下某个版本的内核基址当常量，重启一次就失效
+  - 用用户态地址范围的经验去判断内核地址，会把超空间区域误判成异常
+  - 地址有效不代表对象存活，映射存在与内容未释放是两件事

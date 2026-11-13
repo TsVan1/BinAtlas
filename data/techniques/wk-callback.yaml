@@ -1,0 +1,250 @@
+# BinAtlas 知识库 · 技术 · dom:wk-callback
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:process-thread-callback
+  name: 进程线程通知回调
+  name_en: Process & Thread Notification
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 注册进程与线程创建退出的通知回调，在对象生命周期早期介入观测或拦截。难点是回调在父进程或初始化上下文里执行，此时目标对象尚未初始化完，阻塞等待极易造成自死锁。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 回调注册与注销代码
+  - 回调触发条件说明
+  - 目标对象的早期状态观测结果
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \Callback'
+    note: 查看回调对象命名空间；能否完整列出随系统版本而异，缺失不代表没注册
+  - cmd: dt nt!_EX_CALLBACK*
+    note: 通配匹配回调相关类型，先确认当前符号里存在哪些类型再解读
+  - cmd: lm
+    note: 核对回调注册方模块是否仍加载，残留回调常指向已卸载模块
+  pitfalls:
+  - 在回调里同步等待新建进程的状态，会把父进程的创建路径拖成自死锁
+  - 只注销部分回调，卸载后残留指针在下次事件触发时直接蓝屏
+  - 创建回调拿到的是早期对象，用常规状态查询会读到尚未填充的字段
+- id: tech:image-load-callback
+  name: 映像加载回调
+  name_en: Image Load Notification
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在可执行映像映射完成、入口执行之前收到通知，用基址与映像信息判断是否值得关注。难点是回调只给很少信息，需自行解析映像结构，而在这个阶段做重活会拖慢每一次进程启动。
+  difficulty: 4
+  prerequisites:
+  - tech:process-thread-callback
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 映像加载事件流
+  - 关键字段提取结果
+  - 回调开销评估
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \Callback'
+    note: 确认映像加载回调是否已注册
+  - cmd: lmvm {{module}}
+    note: 查看模块加载基址与时间戳，用于验证回调里取到的信息
+  - cmd: '!lmi {{module}}'
+    note: 检查模块符号与映像信息，辅助判断模块是否被替换
+  pitfalls:
+  - 在回调里做完整映像解析与路径匹配，进程启动密集时会叠加成整体卡顿
+  - 映像可能已被换出或卸载后才去处理，先前保存的基址随之失效
+  - 只按路径黑名单判断，改名或内存加载的映像直接绕过
+- id: tech:registry-callback-filtering
+  name: 注册表回调过滤
+  name_en: Registry Callback Filtering
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在注册表操作前后收到通知，按键路径与操作类型决定放行、审计还是拒绝。难点是路径可能尚未规范化（重定向、符号链接、相对路径），而拒绝系统级写入会造成难以预期的连锁故障。
+  difficulty: 5
+  prerequisites:
+  - tech:process-thread-callback
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 监控规则与命中记录
+  - 路径规范化处理方案
+  - 拦截副作用评估
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \Callback'
+    note: 查看注册表回调的注册情况
+  - cmd: reg query <键路径>
+    note: 在目标系统上核对键的真实值，与回调观测到的操作对照
+  - cmd: dt nt!_EX_CALLBACK*
+    note: 确认回调相关类型在当前符号里的定义，避免用错结构解读
+  pitfalls:
+  - 只用原始路径匹配，重定向与符号链接会让同一次写入出现两个路径
+  - 拦截时直接返回错误码，会让依赖该写入的系统组件停在半初始化状态
+  - 启动早期触发的写入发生时，依赖的用户态服务还没就绪
+- id: tech:handle-operation-callback
+  name: 句柄操作回调
+  name_en: Handle Operation Callback
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在句柄打开与复制路径上收到通知，可观测甚至缩减将授予的访问权限。难点是回调运行在任意进程线程上下文，必须避锁并控制开销，而权限位的改动会反过来影响调用方的后续行为。
+  difficulty: 5
+  prerequisites:
+  - tech:process-thread-callback
+  - tech:token-privilege-inspection
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 句柄操作事件流
+  - 权限缩减效果验证
+  - 开销与稳定性评估
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: '!handle 0 f Process'
+    note: 对照观察句柄与授予权限，验证回调是否真的改变了结果
+  - cmd: '!object \Callback'
+    note: 确认回调注册状态
+  - cmd: dt nt!_OBJECT_TYPE
+    note: 查看对象类型结构；对象操作类回调按类型挂在各自的回调链上，字段名以符号输出为准
+  pitfalls:
+  - 在回调里获取会阻塞的锁，句柄操作极频繁，立刻表现为整机变慢
+  - 盲目清除权限位会让合法调用方拿到意外失败，用户侧表现为莫名拒绝访问
+  - 回调里保存对象指针却不加引用，对象释放后再使用即蓝屏
+- id: tech:wfp-callout-filtering
+  name: 网络过滤回调驱动
+  name_en: Network Filtering Callouts
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在网络栈的分层上注册分类回调，对连接与数据包做检查或阻断。难点是分类函数运行在较高中断级别，既不能阻塞也不能做重活，它与用户态策略之间的同步还必须无锁可靠。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 过滤层与回调设计
+  - 策略同步方案
+  - 分类回调开销评估
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: netsh wfp show state
+    note: 导出当前过滤状态；输出到文件，参数与格式随系统版本略有差异
+  - cmd: netsh wfp show filters
+    note: 列出已注册过滤器，核对分层与权重是否符合设计
+  - cmd: '!object \Device'
+    note: 确认过滤组件相关设备对象是否创建成功
+  pitfalls:
+  - 在分类回调里等待用户态决策，会把整条连接路径卡死
+  - 过滤层选错只看到部分流量，结论会变成没有该流量而不是没看到
+  - 卸载时未注销回调，网络栈继续调用已卸载代码
+- id: tech:minifilter-development
+  name: 微过滤驱动开发
+  name_en: Minifilter Development
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 以过滤管理器管辖的过滤单元介入文件操作，注册前置与后置回调并管理流、实例、文件三级上下文。难点是上下文生命周期与取消、卸载路径交织，任何一处引用没配平都会在压力下崩。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-entry-device-object
+  - tech:driver-irp-dispatch
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 过滤驱动骨架
+  - 上下文生命周期设计
+  - 回调注册与注销清单
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: fltmc filters
+    note: 列出已加载过滤器与高度值，确认目标过滤器在链上的位置
+  - cmd: fltmc instances
+    note: 查看过滤器在各卷上的实例，实例缺失说明挂载没成功
+  - cmd: '!fltkd.filters'
+    note: 调试器扩展查看过滤管理器侧状态；扩展命令随调试工具版本变化，不可用就退回 fltmc
+  pitfalls:
+  - 上下文引用没配平，卷下马或卸载时触发已释放内存访问
+  - 前置回调里对同一文件再发起 I/O 却不做重入判断，会自己等自己
+  - 只测单卷单文件，多卷与网络路径下的实例创建失败不会被发现
+- id: tech:filter-altitude-ordering
+  name: 过滤高度与顺序
+  name_en: Filter Altitude Ordering
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 为过滤器选定高度值以决定它在链上的相对位置，并评估与加密、备份、防病毒类过滤器的相互影响。难点是高度在安装时确定且运行期不可调整，选错只能在部署之后才暴露冲突。
+  difficulty: 4
+  prerequisites:
+  - tech:minifilter-development
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 高度选型依据
+  - 链上顺序实测结果
+  - 与既有过滤器的兼容结论
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: fltmc filters
+    note: 查看所有过滤器及高度，直接读出链上顺序
+  - cmd: fltmc instances
+    note: 查看实例状态，确认顺序结论不是建立在未挂载的过滤器上
+  - cmd: '!fltkd.filters'
+    note: 调试器侧交叉核对过滤器链；扩展不可用则只用 fltmc 的结论
+  pitfalls:
+  - 高度值绑定在服务注册信息里，改高度必须卸载重装
+  - 只在自己机器上看顺序，客户机器多一个过滤器就改变了实际行为
+  - 高度相同或相近的过滤器之间，行为差异会被放大成兼容性问题
+- id: tech:callback-integrity-audit
+  name: 回调完整性审计
+  name_en: Callback Integrity Audit
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 对比回调注册集合与历史基线，发现被摘除或被替换的回调项，判断是合法卸载还是可疑篡改。难点是没有稳定的完整枚举接口，取到的集合本身可能已被篡改，必须多来源交叉印证。
+  difficulty: 5
+  prerequisites:
+  - tech:registry-callback-filtering
+  - tech:handle-operation-callback
+  artifacts:
+  - art:kernel-module
+  - art:driver
+  - art:memory-dump
+  outputs:
+  - 回调快照与差异清单
+  - 可疑摘除项结论
+  - 多来源交叉印证证据
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!object \Callback'
+    note: 取回调对象快照，与基线做差集
+  - cmd: lm
+    note: 核对快照里回调所属模块是否仍加载；未加载却仍有回调即为可疑
+  - cmd: dt nt!_EX_CALLBACK*
+    note: 通配确认类型集合，避免用错类型名解读
+  pitfalls:
+  - 把列表里没有当成结论，很多回调不在命名空间可见，会大量漏报
+  - 基线快照取自已可能被感染的机器，差集自然为空
+  - 合法安全产品的卸载与恶意摘除结果一致，必须结合模块加载与签名判断

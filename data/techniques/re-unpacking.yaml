@@ -1,0 +1,362 @@
+# BinAtlas 知识库 · 技术 · dom:re-unpacking
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:packer-fingerprinting
+  name: 壳类型指纹识别
+  name_en: Packer Fingerprinting
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 判定目标是否加壳、属于压缩壳还是保护壳，为后续路线定方向。难点是定制壳会刻意抹掉标识，节区名与入口形态都能伪造。
+  detail: 场景是拿到样本先判断要不要走脱壳路线：是不是壳、压缩壳还是保护壳、可能叠了几层，这一步决定后面所有步骤的优先级。与静态元信息研判的区别是那条读头部与依赖，本条专看「有没有被壳改过」这类结构性矛盾；与反转储分析的区别是这里只判定不处理。注意点：判定库更新滞后，新壳或定制壳会被判成未知，甚至误判成编译器产物；节名可改、熵可加噪、入口可伪装，单一信号不足以定论；虚拟化保护没有整段高熵，它的代码段是正常可读的分发器。
+  principle: 识别可行，是因为加壳必然在结构上留下痕迹：原始代码被压成数据后入口不能指向真实起点，壳必须先跑起来再交接，于是入口落在非常规节、节区熵接近上限、导入表被压到极少条目。同时引导段实现有固定形态，字节序列可做家族级匹配。反过来这些痕迹都能伪造：节名可改、熵可加噪、入口可伪装，所以指纹只给先验，最终判定要靠入口位置与节区结构这类难以自洽伪造的独立信号一致。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 壳类型与族系判定
+  - 判定依据与矛盾点
+  - 加壳层数推测
+  - 后续脱壳路线建议
+  cost: low
+  false_positive_risk: medium
+  note: 与既有 tech:malware-static-triage 的加壳判定有交集：那条把加壳判定作为样本研判的一个输出，本条专做壳识别并延伸到族系与层数，结论粒度更细。
+  commands:
+  - cmd: diec {{binary}}
+    note: 给出壳与编译器判定；判定库更新滞后时会误判，需人工复核
+  - cmd: rabin2 -I {{binary}}
+    note: 看入口位置、节区名与熵，入口落在非常规区段是强信号
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d[:2])" {{binary}}
+    note: 核对文件头是否仍是合法映像头；有些壳把原始头存在别处
+  procedure:
+  - 用 diec {{binary}} 拿一次工具判定，把它当先验而不是结论。
+  - 用 rabin2 -I {{binary}} 读入口位置、节区名、熵与导入条目数，逐项与正常编译产物对比。
+  - 用脚本打印文件前两个字节，确认仍是合法映像头，还是壳把原始头挪到了别处。
+  - 三份结论交叉比对；若互相矛盾，以入口位置与节区结构这类难以伪造的信号为准。
+  - 按结论给路线：压缩壳走标准脱壳，保护壳按层处理，虚拟化保护直接转语义还原。
+  - 记录判定依据与矛盾点留档，转储之后回来复核判定是否成立。
+  pitfalls:
+  - 节区名可被刻意改成正常名字，按名字判定会直接判错
+  - 高熵不必然是壳，加密资源与压缩数据同样是高熵
+  - 同一壳的不同版本特征不同，识别出族系不代表知道具体版本
+  - 虚拟化保护不会表现为整段高熵，它的代码段是正常可读的分发器
+- id: tech:oep-location
+  name: 原始入口点定位
+  name_en: Original Entry Point Location
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 找到壳把控制权交还给原始程序的时刻，作为转储与修复的锚点。难点是交接可以发生在任意深度，还可能被切成多次分段执行。
+  detail: 场景是确认壳已把原始代码解压并即将交接控制权的那一刻，为转储与导入表修复提供时间锚点。与内存转储的区别是这里只负责找时刻，具体抓取与重排是下一步；与反转储分析的区别是那条处理壳的阻挠，本条处理交接点本身的判定。注意点：交接可能发生在任意深度，分段解壳时第一次交接只是中间态；入口落在系统库是常见误报；入口地址对不代表可独立运行，那段代码仍依赖运行时数据；单步跟完整个壳在真实样本上不可行，必须在关键调用上设断。
+  principle: 定位原始入口之所以必要，是因为转储只有在原始代码已解压、且尚未被后续运行改写的那个时刻才有意义：壳在自己的入口处先做解压与重定位，直到把控制权交回原始入口，内存里才是完整明文；早于此刻抓到的是压缩态或半解压态，晚于此刻可能已被自校验改回或已初始化掉部分结构。判定到达这一刻的可靠信号是写内存停止之后的一次远跳与权限变更，而不是某个固定地址。
+  difficulty: 4
+  prerequisites:
+  - tech:packer-fingerprinting
+  - tech:debugger-attach-and-breakpoint
+  - tech:callstack-and-backtrace-analysis
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 原始入口点地址与命中依据
+  - 交接时刻的内存与寄存器状态
+  - 分段执行模式说明
+  - 未命中时的备选判据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -ex "catch syscall mprotect" -ex run -ex "info registers" {{binary}}
+    note: 壳写完代码后通常要改页权限，权限变更常出现在交接之前
+  - cmd: strace -f -e trace=mprotect -o {{out}} {{binary}}
+    note: 记录权限变更的地址与范围，用于缩小目标区段
+  - cmd: gdb -q -batch -ex "break *0x0" -ex run -ex bt {{binary}}
+    note: 在可疑交接点停下看栈，栈上残留的加载器痕迹可佐证
+  procedure:
+  - 用 strace -f -e trace=mprotect -o {{out}} {{binary}} 记录权限变更的地址与范围，先缩小解压写入的区段。
+  - 用 gdb -q -batch -ex "catch syscall mprotect" -ex run -ex "info registers" {{binary}}
+    停在每次权限变更处，看调用者判断是解压器还是正常加载器。
+  - 在可疑交接点下断点，用 break *0x0 的形式在目标地址停下，再用 bt 看栈上残留的加载器痕迹。
+  - 观察交接后第一段代码是否出现与壳无关的常规初始化形态，这是到达原始入口的强信号。
+  - 若疑似分段解壳，把交接点逐个记录，取最后一次交接作为转储锚点。
+  - 命中后立刻记下该时刻的内存布局与寄存器状态，交给转储与修复步骤使用。
+  pitfalls:
+  - 入口落在系统库里的情形是常见误报，那不是目标程序的原始入口
+  - 分段解壳时第一次交接只是中间态，停早了转储出来的是半成品
+  - 入口地址正确不代表可独立运行，那段代码仍可能依赖运行时数据
+  - 单步跟完整个壳在真实样本上几乎不可行，必须在关键调用上设断
+- id: tech:memory-dump-rebuild
+  name: 内存转储与镜像重建
+  name_en: Memory Dump & Image Rebuild
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 抓取解壳后的内存区域并按映像布局重拼成可分析文件，修复节区与对齐。难点是内存布局与文件布局的偏移映射不一致，区段边界要自行判定。
+  detail: 场景是已定位到交接点、需要把内存里的明文代码变成能反编译的文件时；也用于对齐异常、反编译器读不出函数时回到布局层面排错。与内存扫描的区别是那条在运行态改字节，本条把内存搬成文件；与导入表重建的区别是这里只处理布局与本体重建，符号引用留给下一步。注意点：内存按页对齐、文件按文件对齐，两者偏移差不固定；未初始化数据段在内存里有值但文件里不该占字节；转储时机不对会抓到解壳中途的混合态；壳可能清零头部或抽走节表，重建时必须补回。
+  principle: 重建之所以要重排，是因为内存布局与文件布局用的是两套对齐：加载器把每个节按内存对齐铺到虚拟地址上，磁盘上却按文件对齐紧凑存放，两者的偏移差不是常数，整块转储按文件偏移一一写出必然错位。未初始化数据段在内存里已被填零或保留旧值，文件里本不该出现，保留它会让后续比对失真。因此重建的本质是按节表把内存地址映射回文件偏移，并补回被壳擦掉的头信息与节表。
+  difficulty: 4
+  prerequisites:
+  - tech:oep-location
+  artifacts:
+  - art:memory-dump
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 可反编译的重建镜像
+  - 内存布局与文件布局映射表
+  - 修复项清单
+  - 残留不一致点说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gcore -o {{out}} {{pid}}
+    note: 抓整进程内存；产物是全地址空间映像，需按段裁出目标区
+  - cmd: procdump -ma {{pid}} {{out}}
+    note: Windows 侧整进程转储，模块边界仍可依加载器结构定位
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(len(d))" {{out}}
+    note: 先确认转储大小与预期内存范围匹配，再谈修复
+  procedure:
+  - 用 procdump -ma {{pid}} {{out}} 在 Windows 侧抓整进程转储，类 Unix 侧用 gcore -o {{out}} {{pid}}。
+  - 用脚本打印转储大小与头部字节，确认范围与目标模块虚拟地址区间对得上，再谈修复。
+  - 按模块基址与节表把内存偏移换算成文件偏移，写出节区边界与对齐映射表。
+  - 按映射回收每个节的数据，剔除未初始化段在内存里的填充。
+  - 补回头部与节表，修正镜像大小、节表位置与校验和。
+  - 用解析器重新加载重建镜像，确认能识别入口与节区后再交给反编译器。
+  - 把仍不一致的点单独列出，不要硬凑成合法节。
+  pitfalls:
+  - 内存按页对齐而文件按文件对齐，整块写出会让所有偏移错位
+  - 未初始化数据段在内存里有值但文件里不该有，保留它会让后续比对失真
+  - 转储时机不对会抓到解壳中途的混合态，代码一半新一半旧
+  - 有些壳会清零头部或抽走节区表，重建时必须先补回头部
+- id: tech:iat-rebuild
+  name: 导入表重建
+  name_en: Import Table Rebuild
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 恢复被壳重写或抹除的导入表，让转储镜像重新具备可分析的符号引用。难点是运行期解析出的地址已丢失原始名字，只能靠调用特征反查。
+  detail: 场景是转储镜像能打开但没有导入、或调用目标显示成一串地址，导致反编译器把函数调用当数据时；也用于判断壳是否把解析改成哈希查表。与内存转储的区别是那一步解决布局，这一步解决符号引用；与反转储分析的区别是这里不处理壳的阻挠，只做还原。注意点：转储时表里可能已填真实地址，直接当函数指针会当代码；壳可把部分调用改成哈希解析，这类调用永远不在标准导入表里；重建后忘改数据目录的偏移与大小，镜像看起来有表但加载器不认；按地址猜接口会张冠李戴。
+  principle: 转储后必须重建导入表，是因为磁盘上的导入表存的是按名或按序号引用的占位项，加载器在运行时把这些项填成真实地址；壳常把整张表搬走或改写，于是转储镜像里原表位置要么是空、要么是一串看起来像代码的真实地址，与磁盘布局完全不一致。原样保留，反编译器会把函数地址当数据或错认调用目标；直接丢掉，镜像又失去依赖信息。重建就是把运行时真实地址反查回模块与函数名，再按磁盘格式重写。
+  difficulty: 5
+  prerequisites:
+  - tech:memory-dump-rebuild
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 重建后的导入表
+  - 无法归属的调用地址清单
+  - 按调用特征推断的候选接口
+  - 重建前后的一致性校验结果
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: rabin2 -i {{binary}}
+    note: 读当前导入表，判断是空表、残缺表还是指向壳自己的表
+  - cmd: gdb -q -batch -ex "info functions ^.*LoadLibrary" {{binary}}
+    note: 有符号时可反查已解析函数地址，用来给空洞项填名
+  - cmd: objdump -T {{binary}}
+    note: 对照动态符号，核对重建结果是否与原始依赖一致
+  procedure:
+  - 用 rabin2 -i {{binary}} 读当前导入表，判断是空表、残缺表还是指向壳自己的表。
+  - 有符号时用 gdb -q -batch -ex "info functions ^.*LoadLibrary" {{binary}} 反查已解析地址对应的模块与函数，给空洞项填名。
+  - 用 objdump -T {{binary}} 对照动态符号，核对重建结果与原始依赖是否一致。
+  - 无法归属的调用地址按参数形态与返回用途推断候选接口，标为待验证，不要直接写死。
+  - 按磁盘布局重写函数名表、序号表与名字表三段，并更新数据目录里的偏移与大小。
+  - 用解析器与加载器各验一次，不能只靠一个工具的结论。
+  pitfalls:
+  - 转储时表里可能已被填入真实地址，直接当函数指针看会当成代码
+  - 壳可以把部分调用改成哈希解析，这类调用永远不在标准导入表里
+  - 重建后忘改目录表里的偏移与大小，镜像看起来有表但加载器不认
+  - 按地址猜接口会张冠李戴，同名导出在不同模块里地址不同
+- id: tech:anti-dump-countermeasure-analysis
+  name: 反转储与自校验分析
+  name_en: Anti-Dump & Self-Check Analysis
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 识别壳为阻止转储与篡改而布设的检查点，包括头部擦除、区段改写与校验回路。难点是检查散落在多条路径上，绕掉一个还会从别处触发。
+  detail: 场景是转储产物跑不起来、或被改回原样、或绕过某个检查后行为静默变错时，用来找出壳布下的检查点及其触发条件。与虚拟化保护分析的区别是那条处理字节码语义，本条处理完整性校验与反转储；与反转储工具的区别是这里要给出冲突矩阵与安全顺序，而不是逐项打补丁。注意点：检查散落在多条路径上，绕一个还会从别处触发；自校验可能覆盖你打的补丁；用信号与异常实现的检查在调试器下表现不同；依赖硬件或时间的检查换环境后结论失效。
+  principle: 反转储手段有效，是因为它们把转储产物与运行中的真实状态绑定：壳在启动时记下关键区段的校验值或页状态，之后任何外部写入、断点或读取造成的差异都会被比对出来；头部擦除与区段改写则让转储下来的镜像天然不完整。对付它的关键不是逐个绕过，而是找出检查点读取的输入源，改输入源比改检查分支更稳，也不会因为改分支引入新的不一致而触发另一条路径。
+  difficulty: 5
+  prerequisites:
+  - tech:memory-dump-rebuild
+  - tech:syscall-tracing
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 检查点清单与触发条件
+  - 检查点与转储行为的冲突矩阵
+  - 可安全绕过的顺序说明
+  - 无法消除的残余检查
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -ex "catch syscall mprotect" -ex run -ex bt {{binary}}
+    note: 在权限变更处看栈，反转储手段常与页权限翻转同时出现
+  - cmd: r2 -q -c "aaa; axt @ sym.main" {{binary}}
+    note: 反查入口被谁引用，可定位壳在交接前后插入的检查调用
+  - cmd: strace -f -o {{out}} {{binary}}
+    note: 观察异常调用序列（自读自身、信号使用）是检查点存在的侧证
+  procedure:
+  - 用 strace -f -o {{out}} {{binary}} 跑一遍，看有无自读自身、异常信号与权限翻转这类检查点侧证。
+  - 用 gdb -q -batch -ex "catch syscall mprotect" -ex run -ex bt {{binary}} 在权限变更处看栈，定位与页权限相关的检查。
+  - 用 r2 -q -c "aaa; axt @ sym.main" {{binary}} 反查入口引用，找出交接前后插入的检查调用。
+  - 为每个检查点记录触发条件与读取的输入源，判断是比对自己内存、比对磁盘还是看环境。
+  - 按会改写内存的先处理、只读比对的放后面来排序，避免前一步触发后一步。
+  - 每绕一个就重跑一次转储，确认产物完整；无法消除的残余检查单独列出并标注对结论的影响。
+  pitfalls:
+  - 绕过一个检查点后程序静默走到错误分支，不报错，极易误以为成功
+  - 自校验覆盖范围可能包含你自己打的补丁，改一处触发另一处
+  - 用信号与异常实现的检查在调试器下表现不同，静态看到从不触发不代表运行时不触发
+  - 部分手段依赖硬件或环境（调试寄存器、时间差），换环境结论失效
+- id: tech:emulation-assisted-unpacking
+  name: 模拟执行辅助脱壳
+  name_en: Emulation-Assisted Unpacking
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 在受控模拟环境里跑解壳代码，记录写内存与分支，自动推进到交接点。难点是壳会探测执行环境，模拟不完整就会卡在自检逻辑里。
+  detail: 场景是壳带反调试或检测调试器、真机单步会被干扰时，改在受控模拟环境里跑解壳代码；也用于批量处理同族样本，把定位交接点的过程自动化。与原生层运行时插桩的区别是这里不注入进程，环境完全受控；与嵌套壳剥离的区别是那条处理层数，本条提供单层内的自动化推进手段。注意点：模拟不完整时壳会卡在自检逻辑里，表现为死循环而非报错；依赖指令计数与时间戳的解压参数要求模拟时序与真实一致；模拟产物不可直接采信，必须回真实环境验证。
+  principle: 模拟执行能脱壳，是因为解压本身是纯计算：给定相同的初始内存与指令流，解压结果与真实运行一致，而模拟器可以精确记录每次写内存，并跳过不需要的外部交互。它比真机调试更适合对付反调试，因为不暴露调试器痕迹；但也因此与真实环境有差距，凡依赖处理器特性、时间戳、环境块的解压参数都会算错，模拟轨迹与真实轨迹在这里分叉，必须用真实执行校正后再采信。
+  difficulty: 4
+  prerequisites:
+  - tech:packer-fingerprinting
+  - tech:oep-location
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:shellcode
+  outputs:
+  - 写内存轨迹与解压后的区段
+  - 自动判定的交接点
+  - 缺失的环境模拟项清单
+  - 失败原因定位
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: qemu-x86_64 -d in_asm -D {{out}} {{binary}}
+    note: 用户态模拟执行并记录指令流；仅依赖较少的壳才跑得通
+  - cmd: python3 -c "import angr,sys; p=angr.Project(sys.argv[1], auto_load_libs=False);
+      print(p.arch)" {{binary}}
+    note: 用模拟执行框架驱动解壳循环，先确认架构与基址解析正确
+  - cmd: strace -f -e trace=write -o {{out}} {{binary}}
+    note: 对照真实运行的调用序列，找出模拟环境里缺失或行为不同的调用
+  procedure:
+  - 用 qemu-x86_64 -d in_asm -D {{out}} {{binary}} 在用户态跑一遍并记录指令流，确认能跑到解压结束。
+  - 用脚本按架构与基址建立模拟状态，从入口开始只模拟与解压相关的直线代码。
+  - 记录每次写内存的地址与内容，由写区间边界划出解压后的候选区段。
+  - 在写内存停止、控制流出现远跳的位置判定交接点。
+  - 用 strace -f -e trace=write -o {{out}} {{binary}} 对照真实运行，找出模拟环境里缺失或行为不同的调用。
+  - 补齐缺失的环境模拟项后重跑，直到轨迹与真实执行收敛。
+  - 模拟产物回真实环境执行验证一次，不可直接采信。
+  pitfalls:
+  - 壳会读进程环境块与 CPU 特性，模拟器缺这些结构就会走进死循环
+  - 指令计数与时间戳被用作解压参数时，模拟时序必须与真实一致
+  - 跑到交接点后仍需真实执行验证，纯模拟产物不可直接采信
+  - 反虚拟机检测在这里同样生效，只是判据换了一套
+- id: tech:vm-protection-analysis
+  name: 虚拟化保护分析
+  name_en: Virtualization-Based Protection Analysis
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 分析把指令翻译成自定义字节码执行的分发器，还原被虚拟化的语义。难点是没有可还原的原始机器码，只能靠语义映射逐条重建。
+  detail: 场景是被保护函数反编译出来只有一段分发器循环、看不到原始逻辑时，需要还原它到底做了什么；也用于判断某保护器是否值得投入逐条还原。与嵌套壳剥离的区别是这里没有层可剥，虚拟化后不存在可交接的原始入口；与常规脱壳的区别是产物不是镜像而是语义表。注意点：虚拟指令集可被随机化，同一保护器的不同函数可能用两套映射；逐条映射成本极高，必须限定在影响结论的函数上；分发器里常嵌套异常与反调试，跟踪会被跳出。
+  principle: 虚拟化保护之所以难，是因为它取消了原始机器码这个前提：被保护的函数被编译成自定义字节码，由分发器逐条解释执行，于是既没有可还原的原始入口，也没有可转储的明文代码。分析只能改走语义映射：先认清取指方式——字节码指针存在哪里、每条指令多长、操作码如何分派，再为每个操作码确定它对寄存器与内存的效果，逐条累积出等价的高级语义。映射的可靠性靠真实执行里指针推进与结果比对来验证。
+  difficulty: 5
+  prerequisites:
+  - tech:anti-dump-countermeasure-analysis
+  - tech:control-flow-graph-recovery
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 分发器与字节码布局
+  - 指令语义映射表
+  - 已还原的虚拟化函数
+  - 未覆盖的虚拟指令清单
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: r2 -q -c "aaa; afl" {{binary}}
+    note: 先定位分发器，单个大型分支循环是这类保护的结构标志
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 核对手写分发器的跳转表形态，确定虚拟指令的字长与取指方式
+  - cmd: gdb -q -batch -ex "watch -l *(char*)0x0" {{binary}}
+    note: 在真实执行里观察字节码指针推进，验证语义映射是否正确
+  procedure:
+  - 用 r2 -q -c "aaa; afl" {{binary}} 找分发器：单个大型分支循环、跳转表密集是这类保护的结构标志。
+  - 用 objdump -d --no-show-raw-insn {{binary}} 核对手写分发器的跳转形态，确定虚拟指令字长与取指方式。
+  - 定位字节码指针所在的寄存器或内存位置，弄清每条指令如何推进它。
+  - 用 gdb -q -batch -ex "watch -l *(char*)0x0" {{binary}} 在真实执行里观察指针推进，验证取指理解是否正确。
+  - 先为算术、内存读写、跳转三类操作码建立语义表，再逐步扩到其余。
+  - 把还原出的语义与调用点上下文对照，只还原影响结论的函数，不追求全量。
+  - 记录未覆盖的虚拟指令与随机化差异，作为结论边界。
+  pitfalls:
+  - 虚拟化后不存在可交接的原始入口，按常规脱壳流程会一直找不到锚点
+  - 虚拟指令集可被随机化，同一保护器的不同函数可能用两套映射
+  - 逐条映射成本极高，必须限定在影响结论的函数上，别试图全量还原
+  - 分发器里常嵌套异常与反调试，跟踪会被跳出
+- id: tech:multi-layer-unpacking
+  name: 嵌套壳逐层剥离
+  name_en: Multi-Layer Unpacking
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 按层次逐层剥离叠加的多重保护，每剥一层重新判定下一层。难点是层间共享解压缓冲，过早剥离会把下一层的数据当成代码读。
+  detail: 场景是剥完一层后发现产物仍是加壳态，或外层解出的内容依赖另一层解出的密钥时，按依赖顺序逐层处理。与单层脱壳的区别是这里管顺序与层间依赖，方法仍复用每一步的入口定位、转储与导入表修复；与壳类型识别的区别是那条判定有没有壳，本条判定有几层、先剥哪层。注意点：最常见的错是把资源里的压缩数据当成一层壳；内层可能依赖外层解出的密钥与内存状态，单独剥离后无法独立运行；每层都要重新修导入表与对齐，漏修会让下一层的判定失真。
+  principle: 逐层剥离要按顺序，是因为外层负责解出内层：内层的代码与密钥在剥掉外层之前并不存在，而层间常共享同一块解压缓冲，过早剥离会把下一层的数据当成代码读。每剥一层都必须重新判定产物是否仍是合法映像，因为层与层的对齐、导入表与入口定义各自独立，漏修一次，下一层的判定就建立在错误的基址上，最终会得到能反编译但语义错误的镜像。
+  difficulty: 4
+  prerequisites:
+  - tech:packer-fingerprinting
+  - tech:iat-rebuild
+  - tech:executable-unpacking
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 层数与每层判定依据
+  - 逐层转储产物与对应关系
+  - 层间数据依赖说明
+  - 最终可分析镜像
+  cost: high
+  false_positive_risk: medium
+  note: 前置 tech:executable-unpacking 是既有条目，本条不重复单层脱壳方法，只处理叠加层的顺序与层间依赖判定。
+  commands:
+  - cmd: upx -d {{binary}} -o {{out}}
+    note: 仅对这类压缩壳有效；识别失败说明外层不是标准实现，别硬套
+  - cmd: rabin2 -I {{out}}
+    note: 每剥一层就重新判定，确认产物仍是合法映像再进下一层
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(len(d), d[:4])"
+      {{out}}
+    note: 逐层核对产物大小与头部，层数判断错时这里会立刻暴露
+  procedure:
+  - 用 rabin2 -I {{out}} 判定最外层的壳型、入口与节区分布，作为第一层的依据。
+  - 对标准实现的外层用 upx -d {{binary}} -o {{out}} 直接解；识别失败说明外层不是标准实现，不要硬套。
+  - 用脚本打印产物大小与前四个字节，确认仍是合法映像再进下一层。
+  - 每层重新走入口定位、转储与导入表修复，不复用上一层的结论。
+  - 记录层间依赖：哪一层解出的密钥或缓冲区被下一层使用，剥离顺序按依赖倒序排。
+  - 每层产物单独留存并标注来源，最终镜像要能说清由哪几次转储拼成。
+  pitfalls:
+  - 最常见的错是把资源里的压缩数据当成一层壳
+  - 内层可能依赖外层解出的密钥与内存状态，单独剥离后无法独立运行
+  - 每层都要重新修导入表与对齐，漏修会让下一层的判定失真
+  - 剥离顺序错了会得到合法但语义错误的镜像，能反编译不代表是对的

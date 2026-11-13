@@ -1,0 +1,228 @@
+# BinAtlas 知识库 · 技术 · dom:ad-userdebug
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:user-mode-attach-freeze
+  name: 用户态附加与冻结
+  name_en: User-Mode Attach and Freeze
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 把调试器挂到已运行进程并暂停其线程，获得可控的静止现场。难点是附加窗口与目标的反调试初始化竞争，慢一步现场就已被改写。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 附加成功后的线程与寄存器快照
+  - 目标当前的挂起范围
+  - 附加被拒绝的原因判定
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "info threads" -ex "thread apply all bt"
+    note: 按 PID 附加后一次性打印全部线程与栈，批处理模式便于脚本化
+  - cmd: cat /proc/{{pid}}/status | grep -E "^(State|TracerPid)"
+    note: 确认进程是否已被其他调试器占用，TracerPid 非 0 表示已被跟踪
+  pitfalls:
+  - 目标处于不可中断睡眠状态时 ptrace 附加会失败或长时间阻塞，需先让目标退出该状态
+  - 附加后目标 fork 出的子进程默认不被跟进，父进程冻结时子进程仍在运行，现场并不完整
+- id: tech:runtime-module-mapping
+  name: 运行时模块映射
+  name_en: Runtime Module Mapping
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 枚举目标已加载模块与段的实际基址，把静态地址换算成运行时地址。难点是地址随机化与重定位让同一函数每次落点不同，符号还常被剥离。
+  difficulty: 2
+  prerequisites:
+  - tech:user-mode-attach-freeze
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 模块基址与大小表
+  - 静态地址到运行时地址的换算表
+  - 关键函数在内存中的落点
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: cat /proc/{{pid}}/maps | grep -E "r-xp"
+    note: 取可执行映射区间，一个模块首个 r-xp 区间的起点通常就是基址
+  - cmd: gdb -q -batch -p {{pid}} -ex "info sharedlibrary"
+    note: 列出共享库及加载地址，输出里的起始地址列即基址
+  - cmd: readelf -l {{binary}} | grep -A1 LOAD
+    note: 静态查看段的虚拟地址与文件偏移，用于基址换算与映射对照
+  pitfalls:
+  - 同一模块会出现在多个映射区间（可执行、只读、可写各一段），拿错区间起点算出的基址会整体偏移
+  - 位置无关映像要拿符号地址加基址，非位置无关可直接用静态虚拟地址，两种情形混用会把调用点算错
+- id: tech:memory-read-write-patch
+  name: 运行时内存读写
+  name_en: Runtime Memory Read/Write and Patching
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 在目标地址空间读结构体、改指令字节，验证对数据布局与分支条件的假设。难点是页权限与写时复制：只读页直接写会崩，改完还要处理校验。
+  difficulty: 3
+  prerequisites:
+  - tech:runtime-module-mapping
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 关键结构体的内存快照
+  - 已验证的指令级补丁
+  - 页权限变更记录
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "x/16gx $rsp" -ex "info proc mappings"
+    note: 从栈指针附近读内存并对照映射，确认读的是有效页而不是野地址
+  - cmd: gdb -q -batch -p {{pid}} -ex "set *(unsigned char *)$rip = 0x90"
+    note: 把当前指令首字节改成空操作；写只读代码页前要先改页权限才能落笔
+  - cmd: objdump -d -M intel {{binary}} | head -50
+    note: 静态对照反汇编确认补丁点原始指令，避免改错字节位置
+  pitfalls:
+  - 直接向可执行页写入会触发访问违例，Linux 下需借 ptrace 写入或先改保护，Windows 下需先改成可写
+  - 补丁不记录原始字节会导致无法还原，也会让按节区取校验和的检测立刻命中
+- id: tech:single-step-execution
+  name: 单步执行跟踪
+  name_en: Single-Step Execution Tracing
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 逐条执行指令并读寄存器与标志位，把模糊的控制流变成可核对的序列。难点是陷阱标志可被目标检测，单步开销还会让带超时的目标提前退出。
+  difficulty: 2
+  prerequisites:
+  - tech:memory-read-write-patch
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 逐指令执行轨迹
+  - 关键寄存器变化记录
+  - 条件分支的实际走向
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch {{binary}} -ex "set disassemble-next-line on" -ex "starti"
+      -ex "stepi 5" -ex "info registers rip rax"
+    note: 从入口单步五条指令并打印寄存器，适合脚本化确认入口分支条件
+  - cmd: gdb -q -batch -p {{pid}} -ex "si" -ex "x/i $pc"
+    note: 对已运行进程单步一条，并显示下一条待执行指令
+  pitfalls:
+  - 单步遇到系统调用会直接执行到返回而不进入内核，想看内核侧行为必须改用系统调用追踪
+  - 每次停止都会清掉陷阱标志，连续单步要逐步重新进入，不能指望设置一次就一直生效
+- id: tech:call-stack-unwinding
+  name: 运行时栈回溯
+  name_en: Runtime Call Stack Unwinding
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 由栈内容与展开信息还原调用链，定位是哪个调用点触发了敏感操作。难点是优化后的代码没有帧指针，异常帧与尾调用会打断链条。
+  difficulty: 3
+  prerequisites:
+  - tech:runtime-module-mapping
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 调用链与返回地址列表
+  - 可疑调用点定位
+  - 栈布局推断
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "bt full"
+    note: 展开完整调用栈并打印局部变量，符号缺失时只能看到裸地址
+  - cmd: eu-stack -p {{pid}}
+    note: 用 elfutils 从 procfs 读栈并展开，适合目标没有调试符号的场景
+  pitfalls:
+  - 代码以省略帧指针方式编译时，按栈基址链回溯会得到错位的调用链，需靠展开信息或栈扫描校正
+  - 栈上残留的旧返回地址会被误判成帧，深栈回溯必须与代码段地址范围交叉验证
+- id: tech:exception-dispatch-tracing
+  name: 异常分发追踪
+  name_en: Exception Dispatch Tracing
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 观察异常从产生到被处理器接管的路径，识别靠异常做控制流或做自检的代码。难点是首次与二次异常机会、信号传递与继续执行的语义各不相同。
+  difficulty: 4
+  prerequisites:
+  - tech:call-stack-unwinding
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 异常类型与触发指令
+  - 处理器链与接管顺序
+  - 控制流是否被异常改写
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch {{binary}} -ex "handle SIGSEGV stop print pass" -ex run
+    note: 在段错误处停下但仍把信号传给目标，用于区分异常控制流与真实崩溃
+  - cmd: cat /proc/{{pid}}/status | grep -E "^(SigCgt|SigBlk)"
+    note: 查看目标捕获与屏蔽的信号位图，未捕获的同步信号会直接终止进程
+  pitfalls:
+  - 把信号设成不停止会让调试器错过异常点，而靠异常做控制流的代码正需要调试器看不见
+  - Windows 首次异常交给进程内处理器后不再上报调试器，只断在第二次机会会漏掉真正的触发点
+- id: tech:multithread-breakpoint-sync
+  name: 多线程断点同步
+  name_en: Multithread Breakpoint Synchronization
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 在断点命中时冻结全部线程并在恢复时重新布点，避免只停一个线程导致状态被并发改写。难点是线程创建与销毁时机不固定，新线程会漏掉断点。
+  difficulty: 3
+  prerequisites:
+  - tech:user-mode-attach-freeze
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 全线程停止点与栈快照
+  - 并发状态一致性判定
+  - 新建线程的断点补设记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: gdb -q -batch -p {{pid}} -ex "set scheduler-locking on" -ex continue
+    note: 只让当前线程推进、其余线程保持停止，观察窗口内不会被并发改写
+  - cmd: gdb -q -batch -p {{pid}} -ex "info threads" -ex "thread apply all bt"
+    note: 命中后一次性抓全部线程栈，确认是否有线程在窗口内继续推进
+  pitfalls:
+  - 只停住命中线程时其余线程会继续改被观察的数据，结构体可能读到撕裂状态
+  - 运行期新建的线程不会继承断点与暂停状态，必须在创建后补设，否则会漏跟踪
+- id: tech:conditional-breakpoint-watch
+  name: 条件断点与数据观察
+  name_en: Conditional Breakpoints and Data Watchpoints
+  domain:
+  - dom:ad-userdebug
+  parent: dom:ad-userdebug
+  def: 只在条件成立或某块内存被访问时中断，避免在热路径上反复停住。难点是条件表达式在目标上下文求值，写错会改状态或让目标卡死。
+  difficulty: 3
+  prerequisites:
+  - tech:single-step-execution
+  - tech:memory-read-write-patch
+  artifacts:
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 命中条件与命中次数
+  - 数据读写点与访问指令
+  - 关键变量的取值变化
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: gdb -q -batch {{binary}} -ex "break main if $rdi != 0" -ex run -ex "info
+      registers"
+    note: 条件断点示例，只有条件成立才停，条件在目标上下文里求值
+  - cmd: gdb -q -batch -p {{pid}} -ex "watch -l *(long *)$rsp" -ex continue
+    note: 对被监视地址设写观察点，按地址定位而不是每次重新求值表达式
+  pitfalls:
+  - 条件里调用函数会改变目标状态甚至再次触发被观察事件，条件应只读寄存器和内存
+  - 软件观察点靠单步实现，热路径上会把执行拖到超时，命中次数高时应改用硬件观察点

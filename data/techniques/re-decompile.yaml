@@ -1,0 +1,280 @@
+# BinAtlas 知识库 · 技术 · dom:re-decompile
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:decompiler-output-validation
+  name: 反编译结果可信度校验
+  name_en: Decompiler Output Validation
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 把伪代码当假设而非事实，逐条用汇编、运行数据与行为回证。难点是反编译器会为对齐而虚构类型与参数，错误输出看起来同样自洽。
+  difficulty: 3
+  prerequisites:
+  - tech:function-boundary-identification
+  - tech:compiler-provenance-identification
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:pe-dotnet
+  outputs:
+  - 待验证假设清单
+  - 伪代码与汇编的差异点
+  - 已回证与已推翻的结论表
+  - 结论可信度分级
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: radare2 -q -c "aaa; pdc @ sym.main" {{binary}}
+    note: 换另一套反编译器交叉对比同一函数，不一致处就是必须回证的疑点
+  - cmd: objdump -d {{binary}}
+    note: 伪代码与指令对不上时，以指令为准重读该段
+  - cmd: r2 -q -c "aaa; pdf @ sym.main" {{binary}}
+    note: 反汇编视图保留真实宽度与偏移，用来核对伪代码推断的类型宽度
+  pitfalls:
+  - 反编译器的类型是推断出来的，指针与整数可互换显示，别拿类型当真
+  - 两套反编译器结论一致也可能同错，一致性不等于正确性
+  - 优化后的伪代码会把两个分支合成一行三元表达式，看起来像单一逻辑
+  - 变量名是自动生成，不能作为语义依据
+- id: tech:calling-convention-recovery
+  name: 调用约定与参数还原
+  name_en: Calling Convention Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 由调用点与被调点的寄存器与栈使用反推参数顺序、个数与返回值位置。难点是同一函数可能被不同约定调用，可变参数又让参数个数不固定。
+  difficulty: 3
+  prerequisites:
+  - tech:decompiler-output-validation
+  - tech:stack-frame-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  outputs:
+  - 函数签名与参数顺序
+  - 返回值与寄存器占用约定
+  - 可变参数函数识别结论
+  - 调用点与被调点不一致的问题清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 看调用前后寄存器装载与栈清理方向，判断约定与参数个数
+  - cmd: gdb -q -batch -ex "break *main" -ex "run" -ex "info registers rdi rsi rdx"
+      {{binary}}
+    note: 在真实调用点读参数寄存器，比静态猜更可靠
+  - cmd: r2 -q -c "aaa; afcf @ sym.imp.printf" {{binary}}
+    note: 让工具推断某函数的调用约定作为参照，仍需人工核对
+  pitfalls:
+  - 64 位 Windows 的前四参数走寄存器且调用者分配影子空间，容易把影子空间数成参数
+  - 可变参数函数用寄存器传向量参数个数，忽略这点会少读参数
+  - 尾调用优化后调用点消失，按调用点统计参数会得到空集
+  - 32 位约定里栈清理方不同，混判会让所有栈偏移错位
+- id: tech:type-and-struct-recovery
+  name: 类型与结构体还原
+  name_en: Type & Struct Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 由访问偏移与宽度推断聚合类型，重建结构体成员布局。难点是填充字节与柔性数组无法被直接观测，同一偏移在不同路径下形态还可能不一致。
+  difficulty: 4
+  prerequisites:
+  - tech:stack-frame-recovery
+  - tech:calling-convention-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:pe-dotnet
+  outputs:
+  - 结构体成员偏移与宽度表
+  - 填充与对齐推断
+  - 聚合类型的使用点清单
+  - 类型不确定项标记
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: r2 -q -c "aaa; aft @ sym.main" {{binary}}
+    note: 输出工具推断的类型与结构，作为初稿再逐项人工校正
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 逐个核对访存宽度与固定偏移，宽度错一位结论就全变
+  - cmd: gdb -q -batch -ex "ptype struct" {{binary}}
+    note: 有调试信息时直接拿真实类型对照，无符号则跳过
+  pitfalls:
+  - 用 4 字节读一个 8 字节字段的一半是常见误判，必须看完整访存序列
+  - 结构体数组会被误认成结构体内的重复成员，步长是判别关键
+  - 对齐填充不产生访存，永远看不到，只能按 ABI 规则补而不是按没访问就没有
+  - 同一偏移在不同分支被解释成不同类型，可能是联合体或类型混淆，别强行统一
+- id: tech:cxx-vtable-recovery
+  name: C++ 虚表与虚调用还原
+  name_en: C++ Vtable & Virtual Call Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 定位虚表指针、还原虚函数顺序与继承层次，把间接调用还原成具体目标。难点是多继承与虚继承下虚表被拆成多段并附带偏移修正。
+  difficulty: 4
+  prerequisites:
+  - tech:type-and-struct-recovery
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  - art:mach-o
+  outputs:
+  - 虚表到函数的映射表
+  - 类继承层次推断
+  - 间接调用点的候选目标集
+  - 多继承偏移修正说明
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: readelf -S {{binary}}
+    note: 先找只读数据段，虚表通常成组落在那里
+  - cmd: objdump -s -j .rodata {{binary}}
+    note: 直接看只读数据里的函数指针序列，识别连续的虚表块
+  - cmd: r2 -q -c "aaa; axt @ 0x0" {{binary}}
+    note: 反查引用虚表地址的构造点，构造函数里的写入可确认虚表归属
+  pitfalls:
+  - 多继承下第二条基类虚表前带指针偏移修正，按单一虚表还原会整体错位
+  - 虚表首项常与析构或运行时信息相关，从第一项起算函数索引会偏移
+  - 构造与析构过程中虚表指针会被改写，运行期读到的未必是最终虚表
+  - 内联后虚调用可能被去虚拟化，看到直接调用不等于没有虚函数
+- id: tech:template-and-stl-recognition
+  name: 模板与容器特征识别
+  name_en: Template & Container Recognition
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 识别被展开成内联代码的标准库模板实例，把裸内存操作还原成容器语义。难点是实例化后类型信息全丢，只能靠分配、扩容与迭代模式辨认。
+  difficulty: 4
+  prerequisites:
+  - tech:type-and-struct-recovery
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  - art:elf32
+  outputs:
+  - 容器类型与元素类型推断
+  - 迭代器与扩容逻辑标注
+  - 模板实例与源码形态对照
+  - 误判风险说明
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: nm -C {{binary}} | grep -Ei "std::|basic_string|vector"
+    note: 未被完全内联的实例会带修饰名出现，先拿确凿的容器清单
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 核对三指针布局与容量倍增逻辑，这是容器最稳定的形态特征
+  - cmd: strings -a {{binary}} | grep -Ei "basic_string|length_error"
+    note: 异常消息与类型名残留可佐证模板实例存在
+  pitfalls:
+  - 三指针布局也出现在手写动态数组上，仅凭布局认定标准容器会误判
+  - 短字符串优化让小块字符串不出现在堆上，按一定分配过去推必漏
+  - 不同标准库实现布局不同，跨平台套用同一结论会错
+  - 内联后容器操作与业务逻辑混杂，边界靠猜，必须标注为高不确定
+- id: tech:control-flow-structuring
+  name: 控制流结构化折叠
+  name_en: Control Flow Structuring
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 把基本块图折叠成条件与循环等高级结构，恢复可读的控制逻辑。难点是不可归约图与混淆产生的多入口区域无法用单层结构表达。
+  difficulty: 4
+  prerequisites:
+  - tech:control-flow-graph-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:pe-dotnet
+  outputs:
+  - 结构化后的伪代码
+  - 无法结构化的区块清单
+  - 循环类型与退出条件
+  - 与原始控制流图的一致性核对
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: radare2 -q -c "aaa; pdc @ sym.main" {{binary}}
+    note: 拿一版结构化输出，重点看它把哪些区域退化成无条件跳转
+  - cmd: r2 -q -c "aaa; agfj @ sym.main" {{binary}}
+    note: 与控制流图对照，跳转密集处往往就是不可归约区
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 对折叠结果有疑问时回落指令层确认跳转方向
+  pitfalls:
+  - 控制流平坦化的分发循环折叠后看起来像多分支语句，认错会让整段语义全错
+  - 不可归约图强行结构化会产生语法通过但语义不等价的伪代码
+  - 编译器做的循环旋转会多出一个前置判断，不代表源码里是两个分支
+  - 结构化工具对间接跳转的保守处理会凭空插入跳转标签，块越多越明显
+- id: tech:exception-recovery
+  name: 异常处理结构还原
+  name_en: Exception Handling Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 还原捕获与清理路径：定位异常表、识别落地块与栈展开逻辑。难点是异常表在部分二进制里被剥离，只剩调用约定与清理代码可循。
+  difficulty: 4
+  prerequisites:
+  - tech:control-flow-structuring
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:so
+  outputs:
+  - 异常处理表与捕获范围
+  - 清理路径与析构调用点
+  - 异常类型到处理块的映射
+  - 表缺失时的替代判据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: readelf --debug-dump=frames {{binary}}
+    note: 从异常帧信息拿栈展开规则，异常路径多半与之一致
+  - cmd: objdump -d {{binary}} | grep -nE "__cxa_(throw|begin_catch|end_catch)"
+    note: 运行时调用点是异常块最硬的证据，比猜控制流可靠
+  - cmd: r2 -q -c "aaa; afl~personality" {{binary}}
+    note: 查个性化处理函数相关符号，辅助定位异常表
+  pitfalls:
+  - 异常表被剥离后，没有异常与表被删除这两件事无法从静态区分
+  - 析构清理路径与正常返回路径共享尾部代码，按单一出口统计会漏路径
+  - 是否生成展开表受编译选项影响，同一源码不同选项结果不同
+  - 多个捕获块按顺序匹配，静态看到的顺序未必是生效顺序
+- id: tech:inline-and-tailcall-recognition
+  name: 内联与尾调用识别
+  name_en: Inline & Tail Call Recognition
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 辨认被展开进调用者的函数体与被改写成跳转的尾调用，还原真实调用关系。难点是内联后原函数可能完全消失，调用图直接缺节点。
+  difficulty: 4
+  prerequisites:
+  - tech:function-boundary-identification
+  - tech:control-flow-structuring
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:mach-o
+  outputs:
+  - 内联点与推断的被内联函数
+  - 修正后的调用关系图
+  - 疑似消失的函数清单
+  - 与符号表的对照结果
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: nm -C {{binary}}
+    note: 被完全内联的函数不留符号，符号缺失与调用图缺失交叉验证才构成证据
+  - cmd: objdump -d --no-show-raw-insn {{binary}}
+    note: 尾调用表现为先清栈再跳转，与普通调用后返回的形态不同
+  - cmd: r2 -q -c "aaa; afo @ sym.main" {{binary}}
+    note: 看工具列出的调用与跳转关系，其中相当一部分跳转是尾调用
+  pitfalls:
+  - 把尾调用当成独立函数入口，会给调用图补出一条并不存在的边
+  - 内联后同一段代码在多个调用点重复出现，按地址聚类会误判成多个函数
+  - 静态链接的小函数大量内联，符号表为空不代表这些逻辑不存在
+  - 尾调用与普通跳转在指令层完全一样，只能靠上下文区分

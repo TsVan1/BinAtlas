@@ -1,0 +1,288 @@
+# BinAtlas 知识库 · 技术 · dom:re-protocol
+# 规范：03-DATA-SCHEMA.md §2.2
+
+- id: tech:traffic-session-reassembly
+  name: 流量会话重组
+  name_en: Traffic Session Reassembly
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 把抓包还原成双向会话与消息序列，为字段分析准备干净输入。难点是分片、重传与长连接并发会让消息边界无法从包边界直接读出。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pcap
+  - art:elf64
+  - art:apk
+  outputs:
+  - 双向会话清单与消息序列
+  - 按连接切分的原始载荷
+  - 重传与分片等异常流量清单
+  - 待深挖的会话列表
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: tshark -r {{pcap}} -q -z io,phs
+    note: 先看协议层次统计，判断哪种协议承载了业务流量
+  - cmd: tshark -r {{pcap}} -q -z follow,tcp,raw,0
+    note: 按流向拼出完整会话载荷，比逐包读更有用
+  - cmd: tcpdump -r {{pcap}} -nn -X -c 20
+    note: 抽前若干包看十六进制形态，快速判断文本还是二进制协议
+  - cmd: rabin2 -zz {{binary}} | grep -Ei "content-type|application/json" | head
+    note: 在客户端里找协议关键字，先确认接口的编码形态再谈重组
+  pitfalls:
+  - 只看单个包会把跨包消息当成多次独立请求，字段边界全错
+  - 长连接上并发多条请求，仅靠包顺序无法还原请求响应配对
+  - 加密流量的载荷不可读，会话重组只能给出时序与长度
+  - 重传与分片产生重复片段，直接拼接会插入重复字节
+- id: tech:field-boundary-inference
+  name: 协议字段边界推断
+  name_en: Protocol Field Boundary Inference
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 通过同类消息的差分与长度关联，推断未知协议的字段切分与语义。难点是可变长字段与填充使位置不固定，单条样本无法确定边界。
+  difficulty: 4
+  prerequisites:
+  - tech:traffic-session-reassembly
+  artifacts:
+  - art:pcap
+  - art:apk
+  - art:elf64
+  - art:so
+  outputs:
+  - 字段切分表与偏移
+  - 各字段候选语义
+  - 变长字段的长度来源
+  - 未定边界区间说明
+  cost: medium
+  false_positive_risk: high
+  note: 与既有 tech:network-traffic-interception 的边界：那条以拦截与证书固定绕过为主，字段推断只是其附带输出；本条专做明文载荷的字段切分与语义推断，不涉及拦截环境搭建。
+  commands:
+  - cmd: tshark -r {{pcap}} -T fields -e tcp.payload
+    note: 只导载荷做批量对比，去掉包结构干扰
+  - cmd: python3 -c "import sys;a=open(sys.argv[1],\"rb\").read();print([(i,hex(b))
+      for i,b in enumerate(a[:64])])" {{out}}
+    note: 把待比对载荷按字节展开，用于对齐多个样本找公共前缀
+  - cmd: protoc --decode_raw < {{out}}
+    note: 先验证是否属于已知序列化格式，能解析出字段号就有现成结构线索
+  - cmd: rabin2 -zz {{binary}} | grep -Ei "malformed|too short|invalid length" | head
+    note: 解析器的错误文案常暴露字段名与长度约束，可直接印证边界推断
+  pitfalls:
+  - 字段值恰好等于长度或序号时两种解释都自洽，必须用更多样本排除
+  - 定长填充区在不同版本长度可能变化，按固定偏移硬切换版本就全错
+  - 加密或压缩载荷的字节差分毫无意义，先确认载荷是否明文
+  - 只有一条样本时不存在边界推断，任何切分都只是猜想
+- id: tech:binary-serialization-inference
+  name: 二进制序列化逆推
+  name_en: Binary Serialization Inference
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 判定私有载荷采用的序列化框架并还原字段编号与类型。难点是常见框架都有多种编码变体，没有描述文件时类型只能靠值域推断。
+  difficulty: 4
+  prerequisites:
+  - tech:field-boundary-inference
+  artifacts:
+  - art:pcap
+  - art:so
+  - art:apk
+  - art:jar
+  outputs:
+  - 序列化框架判定
+  - 字段编号与标签字节含义
+  - 类型推断与值域约束
+  - 待验证字段清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: protoc --decode_raw < {{out}}
+    note: 无描述符时也能按线格式解出字段号与值，是最快的判定手段
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d[:16].hex())"
+      {{out}}
+    note: 看前若干字节的变长整数与标签，判断是否符合同一编码规则
+  - cmd: strings -a {{binary}} | grep -Ei "protobuf|thrift|msgpack|flatbuf" | head
+    note: 在客户端二进制里找框架依赖，比盲猜载荷更直接
+  pitfalls:
+  - 变长整数编码的字节数随值变化，按固定长度解析会让后续字段全部错位
+  - 同一条消息里字段可乱序或缺省，缺省字段与零值字段在编码上无法区分
+  - 压缩后再序列化会掩盖所有结构，必须先解开压缩层
+  - 框架版本差异带来编码细节变化，判定框架不等于能正确解码
+- id: tech:protocol-state-machine-recovery
+  name: 协议状态机还原
+  name_en: Protocol State Machine Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 从会话序列归纳合法状态与迁移条件，解释为何某些请求只在特定顺序下生效。难点是状态隐含在服务端，客户端只看到被允许与拒绝的结果。
+  difficulty: 4
+  prerequisites:
+  - tech:traffic-session-reassembly
+  artifacts:
+  - art:pcap
+  - art:apk
+  - art:elf64
+  outputs:
+  - 状态与迁移图
+  - 触发条件与前置消息
+  - 被拒绝顺序的异常路径记录
+  - 状态判定依据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: tshark -r {{pcap}} -T fields -e tcp.stream -e tcp.payload
+    note: 按流导出载荷并按连接聚合，先看每条连接的消息顺序
+  - cmd: tshark -r {{pcap}} -q -z conv,tcp
+    note: 看连接建立与结束分布，长连接里的顺序信息才有状态意义
+  - cmd: rabin2 -zz {{binary}} | grep -Ei "not_logged_in|invalid_state|please login"
+      | head
+    note: 服务端的拒绝文案常被固化进客户端，可反推哪些顺序约束是硬性的
+  - cmd: python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(len(d))" {{out}}
+    note: 核对导出载荷总量，确认导出环节没丢掉整段会话
+  pitfalls:
+  - 被动抓包只能看到走过的路径，没走到的迁移无法被推断出来
+  - 重放单条请求成功不代表状态无关，服务端可能刚被前一条请求改了状态
+  - 客户端重试与并发会打乱真实顺序，别把并发当成顺序状态
+  - 负载均衡后同一会话可能落到不同后端，状态表现不一致
+- id: tech:crypto-callsite-location
+  name: 加密调用点定位
+  name_en: Crypto Callsite Location
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 在客户端程序中定位执行加解密的具体位置，把协议字段与代码逻辑对上。难点是封装层次多，最终调用可能穿透数层转发才落到加密实现。
+  difficulty: 3
+  prerequisites:
+  - tech:field-boundary-inference
+  artifacts:
+  - art:so
+  - art:apk
+  - art:elf64
+  - art:pe64
+  outputs:
+  - 加密调用点地址与调用链
+  - 入参与出参的实测样本
+  - 上层封装与封装参数说明
+  - 未覆盖的加密路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: frida-trace -p {{pid}} -i "AES_*" -i "EVP_*" -i "SHA256_*"
+    note: 挂标准加密接口，先看目标到底用了哪些算法
+  - cmd: r2 -q -c "aaa; axt @ sym.imp.EVP_EncryptUpdate" {{binary}}
+    note: 静态反查谁调用了加密库，得到上层封装的位置
+  - cmd: gdb -q -batch -ex "break EVP_EncryptInit_ex" -ex "run" -ex "bt" {{binary}}
+    note: 在真实调用点停下看栈，可验证静态推断的调用链
+  pitfalls:
+  - 自研或内联的加密实现完全不经过标准接口，挂标准接口一个都拦不到
+  - 加密库可能被静态链接并去掉符号，按导入表找会一无所获
+  - 同名接口在多处被调用，命中的未必是处理目标字段的那一处
+  - 上层封装的模式与填充在调用点看不出，需回看上一层的准备代码
+- id: tech:crypto-parameter-recovery
+  name: 加密参数与密钥流还原
+  name_en: Crypto Parameter Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 定位协议里的加密环节并还原算法、模式、密钥与初始向量的来源及派生方式。难点是密钥常由多字段拼接派生，静态与动态各只能看到一半。
+  difficulty: 5
+  prerequisites:
+  - tech:field-boundary-inference
+  - tech:crypto-callsite-location
+  artifacts:
+  - art:pcap
+  - art:so
+  - art:apk
+  - art:elf64
+  outputs:
+  - 算法与模式判定
+  - 密钥与初始向量的派生路径
+  - 明文与密文对照样本
+  - 未确定参数及影响范围
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: rabin2 -zz {{binary}} | grep -Ei "aes|hmac|sha256|md5" | head
+    note: 先看算法常量与查表数据，标准算法的置换表是极强指纹
+  - cmd: ltrace -f -e "EVP_*" -o {{out}} {{binary}}
+    note: 观察加密库调用与参数，确认算法与模式选择
+  - cmd: openssl dgst -sha256 {{out}}
+    note: 对怀疑是摘要的字段做对照计算，验证它是不是哈希而非密文
+  pitfalls:
+  - 密钥可能来自服务端下发的会话字段，只在客户端里找永远找不全
+  - 同一算法不同模式的输出长度与结构差异明显，但都叫同一个算法名
+  - 完整性校验字段与加密字段常相邻且长度相近，混判会解不出明文
+  - 把编码当成加密是最常见的浪费时间的误判
+- id: tech:checksum-field-recovery
+  name: 校验与签名字段还原
+  name_en: Checksum Field Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 定位协议中的校验与完整性字段，还原其计算范围与算法。难点是覆盖范围可能排除自身与某些保留位，范围错一位结果就完全不同。
+  difficulty: 4
+  prerequisites:
+  - tech:field-boundary-inference
+  artifacts:
+  - art:pcap
+  - art:so
+  - art:elf64
+  - art:jar
+  outputs:
+  - 校验字段位置与长度
+  - 参与计算的字节范围
+  - 算法与初值参数判定
+  - 验证结果与失败样本
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: python3 -c "import binascii,sys;d=open(sys.argv[1],\"rb\").read();print(hex(binascii.crc32(d)))"
+      {{out}}
+    note: 先用最常见的校验算法试；对不上再换其它变体
+  - cmd: tshark -r {{pcap}} -T fields -e tcp.payload
+    note: 取多条同结构消息，比较哪几个字节随内容变化且位置固定
+  - cmd: rabin2 -zz {{binary}} | grep -Ei "crc|checksum|signature" | head
+    note: 算法名与查表常量在客户端里通常留有痕迹
+  pitfalls:
+  - 同类校验算法有初值、反射与输出异或的多种变体，参数不对时结果毫无相似性
+  - 校验范围常排除校验字段自身，含入计算就永远对不上
+  - 校验字段可能被加密一并覆盖，先解密再算才有意义
+  - 字节序混淆会让结果稳定错，且看起来像是用了另一种算法
+- id: tech:payload-encoding-chain-recovery
+  name: 载荷编码链还原
+  name_en: Payload Encoding Chain Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 逐层剥开载荷上的编码与压缩，恢复到可读明文。难点是层序未知，每一层都要靠数据特征试出来，而不是从结构里直接读出来。
+  difficulty: 3
+  prerequisites:
+  - tech:field-boundary-inference
+  - tech:binary-serialization-inference
+  artifacts:
+  - art:pcap
+  - art:apk
+  - art:so
+  - art:script
+  outputs:
+  - 编码与压缩的层序
+  - 每层的识别依据
+  - 还原后的明文字段
+  - 无法还原的层及原因
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: python3 -c "import base64,sys;d=open(sys.argv[1],\"rb\").read();print(base64.b64decode(d+b\"==\")[:64])"
+      {{out}}
+    note: 试文本编码一层；长度不是 4 的倍数时需先补齐
+  - cmd: binwalk {{out}}
+    note: 按签名扫内嵌的压缩流与归档，快速判断下一层是什么
+  - cmd: python3 -c "import zlib,sys;d=open(sys.argv[1],\"rb\").read();print(zlib.decompress(d)[:64])"
+      {{out}}
+    note: 试通用压缩解压；失败说明不是裸压缩流或还隔着别的层
+  pitfalls:
+  - 层序错了会得到看似随机但长度正确的字节，容易被误判成已加密
+  - 压缩率极低的层其实是编码而非压缩，用解压去试会一直失败
+  - 同类编码的变体（URL 安全、去填充）用标准表解不出来
+  - 自定义字符表置换是最常见的障碍，先做频率统计再谈解码
