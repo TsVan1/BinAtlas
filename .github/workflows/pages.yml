@@ -1,0 +1,67 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检测项目是否已初始化
+        id: guard
+        run: |
+          if [ -f package.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::package.json 尚未创建，跳过部署"
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 构建静态站点
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm validate
+          pnpm build
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 项目尚未初始化时不阻断：首个文档-only 提交不会红一片
+      - name: 检测项目是否已初始化
+        id: guard
+        run: |
+          if [ -f package.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::package.json 尚未创建，跳过构建与测试"
+          fi
+
+      - name: 校验知识库 YAML（任何阶段都跑）
+        run: |
+          if ls data/**/*.yaml data/*.yaml >/dev/null 2>&1; then
+            python3 - <<'PY'
+          import glob, sys, yaml
+          bad = 0
+          files = glob.glob('data/**/*.yaml', recursive=True)
+          for f in files:
+              try:
+                  list(yaml.safe_load_all(open(f, encoding='utf-8')))
+              except Exception as e:
+                  print(f"::error file={f}::{e}")
+                  bad += 1
+          print(f"已解析 {len(files)} 个 YAML 文件，失败 {bad} 个")
+          sys.exit(1 if bad else 0)
+          PY
+          else
+            echo "data/ 下暂无 YAML，跳过"
+          fi
+
+      # 密钥泄露检查：token 永不进仓库
+      - name: 密钥扫描
+        run: |
+          if grep -rEn 'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}' \
+               --exclude-dir=.git --exclude-dir=node_modules . ; then
+            echo "::error::检测到疑似凭据，请立即撤销该 token"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 安装依赖
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: 数据校验
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm validate
+
+      - name: 构建
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm build
+
+      - name: 测试
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm test -- --run

@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.DS_Store
+public/graph/*.json
+inbox/**/*.json
+reports/*.md
+*.log
+.env
+.env.local
+
+# GitHub 凭证（永不入库）
+github.env
+.env.*
+!.env.example
+
+# 内部资料：AI Agent 编排与提示词，不对外发布
+_internal/
+AGENTS.md
