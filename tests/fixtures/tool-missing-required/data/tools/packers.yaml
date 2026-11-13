@@ -1,0 +1,25 @@
+# 坏样例 3：工具缺必填字段（should be caught by V1）
+# 故意的：没有 license、没有 platforms
+- id: tool:upx
+  name: UPX
+  aliases:
+  - upx
+  category: packers
+  domain:
+  - dom:fixture
+  artifacts:
+  - art:fixture-obj
+  learning_curve: 2
+  maintain_status: active
+  first_release: 1996
+  latest_version: "5.0.2"
+  url: https://upx.github.io/
+  source:
+  - https://github.com/upx/upx
+  verified_at: 2026-11-01
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    这是一个只用于校验器测试的工具条目，tldr 长度刻意写够四十字以上，
+    目的是让 V8 不报错、从而把注意力集中在缺失的必填字段上。
+    它不代表任何真实评价，也不要当真。

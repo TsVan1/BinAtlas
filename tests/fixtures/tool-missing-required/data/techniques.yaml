@@ -1,0 +1,29 @@
+# 校验器测试夹具：两条最小合法技术，供边引用
+- id: tech:alpha
+  name: 示例技术甲
+  name_en: Alpha Technique
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出甲
+  cost: low
+  false_positive_risk: low
+- id: tech:beta
+  name: 示例技术乙
+  name_en: Beta Technique
+  domain:
+  - dom:fixture
+  def: 校验器测试用技术，只保证必填字段齐全。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:fixture-obj
+  outputs:
+  - 示例输出乙
+  cost: low
+  false_positive_risk: low

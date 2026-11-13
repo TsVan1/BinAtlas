@@ -1,0 +1,5 @@
+# 坏样例 1：complements 边缺 rationale（应被 V4 抓住，行号为第 2 行）
+- from: tech:alpha
+  to: tech:beta
+  kind: complements
+  weight: 0.5

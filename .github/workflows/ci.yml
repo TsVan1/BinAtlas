@@ -58,10 +58,9 @@ jobs:
             exit 1
           fi
 
+      # 版本由 package.json 的 packageManager 字段决定；此处再写 version 会报 Multiple versions
       - uses: pnpm/action-setup@v4
         if: steps.guard.outputs.ready == 'true'
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.ready == 'true'
@@ -77,9 +76,9 @@ jobs:
         if: steps.guard.outputs.ready == 'true'
         run: pnpm validate
 
-      - name: 构建
+      - name: 类型检查（图数据构建尚未实现，暂以 typecheck 代替）
         if: steps.guard.outputs.ready == 'true'
-        run: pnpm build
+        run: pnpm typecheck
 
       - name: 测试
         if: steps.guard.outputs.ready == 'true'

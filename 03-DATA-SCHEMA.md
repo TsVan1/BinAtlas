@@ -18,9 +18,20 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
 | --- | --- |
 | `prefix` | 只能是 9 个之一，见第 2 节 |
 | `slug` | 全小写、kebab-case、仅 `[a-z0-9-]`；不用版本号（`tool:ida-pro` 不是 `tool:ida-9`） |
+| **前缀↔类型对照** | 见下表，**只此 9 组**，校验器据此判断节点类型 |
 | **稳定不可变** | ID 一旦入库不得改名（边靠它引用）。改名等于删旧建新 + 重连边 |
-| 唯一性 | 全局唯一（跨类型也不允许重名） |
+| 唯一性 | **ID 字符串全局唯一**；`slug` 允许跨类型重复——`tool:upx` 与 `art:upx` 因前缀不同而无歧义 |
 | 别名 | 放在 `aliases[]`，不进 ID |
+
+**前缀 ↔ 节点类型（唯一权威对照）**
+
+| 前缀 | 类型 | 前缀 | 类型 |
+| --- | --- | --- | --- |
+| `dom:` | `domain` 领域 | `fmt:` | `format` 格式 |
+| `tech:` | `technique` 技术 | `atk:` | `attack` 对抗手法 |
+| `art:` | `artifact` 载体 | `eco:` | `ecosystem` 生态资源 |
+| `tool:` | `tool` 工具 | `ai:` | `ai` AI 能力 |
+| `con:` | `concept` 原理 | | |
 
 ---
 
@@ -33,7 +44,7 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
   name: 固件与嵌入式安全
   name_en: Firmware & Embedded Security
   def: 研究路由器、摄像头、IoT 设备、UEFI 等固件镜像的提取、解包、仿真与漏洞挖掘，核心难点是异构架构与无源码环境。
-  typical_artifacts: [art:firmware-image, art:elf32-mips, art:uefi-bios]
+  artifacts: [art:firmware-image, art:elf32-mips, art:uefi-bios]
   entry_difficulty: 4
   coverage: full          # full | partial | stub
   note: 仿真成功率受外设依赖影响，是当前主要瓶颈
@@ -44,7 +55,7 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
 | `name` | string | ✅ | 中文，≤16 字 |
 | `name_en` | string | ✅ | 英文标准叫法 |
 | `def` | string | ✅ | ≤120 字，必须说清**研究什么 + 核心难点**，禁止百科式空话 |
-| `typical_artifacts` | string[] | ✅ | 引用 `art:` |
+| `artifacts` | string[] | ✅ | 引用 `art:`；**这是矩阵视图的轴数据** |
 | `entry_difficulty` | 1-5 | ✅ | 见 4.3 |
 | `coverage` | enum | ✅ | `full`=工具与技术都充分 / `partial`=某个维度缺失 / `stub`=仅占位 |
 
@@ -60,11 +71,24 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
   def: 把输入符号化后沿路径求解约束，自动找出触发特定分支的输入，适合绕过复杂校验和自动生成 PoC。
   difficulty: 5
   prerequisites: [con:constraint-satisfiability, tech:disassembly]
-  typical_artifacts: [art:elf64, art:pe64, art:firmware-image]
+  artifacts: [art:elf64, art:pe64, art:firmware-image]
   outputs: [可达路径集合, 触发输入的输入约束, 崩溃 PoC]
   cost: high              # low | medium | high —— 单次分析的时间/算力成本
   false_positive_risk: low # low | medium | high —— 结论的可信度
 ```
+
+| 字段 | 类型 | 必填 | 规范 |
+| --- | --- | --- | --- |
+| `name` / `name_en` | string | ✅ | 中文 ≤16 字 |
+| `domain` | string[] | ✅ | ≥1 个 `dom:` |
+| `def` | string | ✅ | ≤120 字 |
+| `difficulty` | 1-5 | ✅ | 见 4.3 |
+| `prerequisites` | string[] | ✅ | 可为空数组；元素必须是已存在的 `tech:`/`con:` |
+| `artifacts` | string[] | ✅ | ≥1 个 `art:` |
+| `outputs` | string[] | ✅ | ≥1 条；这是 `upstream` 边推导的依据 |
+| `cost` | enum | ✅ | `low` / `medium` / `high` |
+| `false_positive_risk` | enum | ✅ | `low` / `medium` / `high` |
+| `note` | string | ❌ | 边界说明、与其他领域的重叠风险、前置的条件性 |
 
 **关键**：`outputs` 决定流水线能否串起来——上游的 outputs 必须能对上下游的输入。A3 据此判断能不能连 `upstream`。
 
@@ -153,6 +177,8 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
   url: https://pwn.college/
   covers: [tech:rop, tech:heap-exploitation]
   free: true
+  source: [https://pwn.college/]
+  verified_at: 2026-11-13
 
 # ai —— AI/自动化分析能力
 - id: ai:ghidramcp
@@ -162,6 +188,8 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
   def: 把 Ghidra 的反编译、符号、交叉引用能力暴露为 MCP 工具，使 LLM 客户端可直接驱动分析。
   maturity: experimental # experimental | usable | production
   url: https://github.com/LaurieWired/GhidraMCP
+  source: [https://github.com/LaurieWired/GhidraMCP]
+  verified_at: 2026-11-13
 ```
 
 ---
@@ -219,6 +247,21 @@ _history:                   # 字段级变更历史（compact 时导出到 _audi
 
 **合并优先级**：overlay > base；`id`/`kind` 不允许被 overlay 修改；
 同一字段多次变更时 `appliedAt` 后写胜出，但完整保留 `_history`。
+
+---
+
+### 2.7 其余节点类型的必填字段（§2.4 的字段表）
+
+| 类型 | 必填 | 选填 |
+| --- | --- | --- |
+| `concept` | `name` `def` `difficulty` `layer` | `related_formats[]` `note` |
+| `format` | `name` `def` `platforms[]` | `parsers[]`（→`tool:`）`note` |
+| `attack` | `name` `def` `targets[]` `difficulty` | `countermeasures[]` `note` |
+| `ecosystem` | `name` `kind` `url` `covers[]` `free` **`source[]` `verified_at`** | `note` |
+| `ai` | `name` `kind` `def` `maturity` `url` **`source[]` `verified_at`** | `host_tool`（→`tool:`）`note` |
+
+> `ecosystem` 与 `ai` 强制出处：课程会下线、工具会停维护、MCP 的 maturity 半年就变。
+> **这类"会失效"的东西没有出处，三个月后就是谣言。**
 
 ## 3. 边定义
 
@@ -398,13 +441,45 @@ _history:                   # 字段级变更历史（compact 时导出到 _audi
 | V8 | `tool.tldr` ≥40 字 | error |
 | V9 | `tool.source` 非空 | error |
 | V10 | `prerequisite` 无环（拓扑检测） | error |
-| V11 | 非 `domain` 节点不得孤立（至少 1 条边） | warning |
+| V11 | 非 `domain` 节点必须被引用：**边或节点字段引用均算**（载体是靠 `artifacts` 字段被引用的，不是靠边） | warning |
 | V12 | `verified_at` 超过 18 个月 | warning |
 | V13 | `unverified: true` 占比 > 15% | warning |
 | V14 | 某 `domain` 工具数 < 5 | warning（并在 stats 报告中标 partial） |
 | V15 | `first_release` 晚于 `verified_at` 年份 | error |
+| V16 | `tool` / `ai` / `ecosystem` 缺 `verified_at` | error |
 
 **校验器输出必须可定位**：`data/tools/packers.yaml:42 · tool.upx.source · 期望非空 · 实际 null`
+
+### 6.1 三条全局口径（避免各写各的）
+
+**① 「字」怎么数**：去掉全部空白字符后的 **Unicode 码点数**。标点算 1 个字，
+英文单词按字母数算（`Ghidra` = 6 字）。所有"≥N 字 / ≤N 字"一律按此口径。
+
+**② 「不确定」怎么写**（三种情况，不许混用）
+
+| 字段类型 | 写法 | 例 |
+| --- | --- | --- |
+| 枚举字段 | `unknown` 是合法枚举值 | `license: unknown`、`maintain_status: unknown` |
+| 字符串字段 | 写字符串 `"unknown"` | `latest_version: "unknown"` |
+| 数值/年份字段 | 写 `null` | `first_release: null` |
+
+**③ `unverified` 与 V13 的分母**：可选布尔字段，缺省 `false`。标为 `true` 表示
+「该条内容未经核实」——**不是**「字段值未知」（后者用上表写法）。
+V13 的分母是**全库节点总数**，阈值 15%。
+
+### 6.2 `data/` 文件布局（固定）
+
+| 路径 | 内容 | 说明 |
+| --- | --- | --- |
+| `data/domains.yaml` | 领域列表 | 单文件 |
+| `data/techniques.yaml` | 技术列表 | 单文件 |
+| `data/artifacts.yaml` | 载体列表 | 单文件 |
+| `data/tools/*.yaml` | 工具 | 按 22 类目拆文件 |
+| `data/edges/*.yaml` | 边 | 按 relation / technique-tool / misc 拆 |
+| `data/_audit/*.jsonl` | 审计日志 | 下划线前缀 → **校验器跳过**，不参与校验 |
+
+> **矩阵轴的唯一数据源是 `artifacts` 字段**（`tool` / `technique` / `domain` 同名同义）。
+> 早期设计用过 `typical_artifacts`，已废弃，出现即为 error。
 
 ---
 

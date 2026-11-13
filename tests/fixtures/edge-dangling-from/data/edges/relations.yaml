@@ -1,0 +1,5 @@
+# 坏样例 2：from 指向从未定义的节点（应被 V3 抓住，行号为第 2 行）
+- from: tech:does-not-exist
+  to: tech:beta
+  kind: complements
+  rationale: 这条边的 from 指向一个从未定义过的节点，用来验证 V3 能否抓住悬空引用。

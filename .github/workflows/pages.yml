@@ -25,7 +25,7 @@ jobs:
       - name: 检测项目是否已初始化
         id: guard
         run: |
-          if [ -f package.json ]; then
+          if [ -f package.json ] && [ -f scripts/build-graph.ts ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -34,8 +34,6 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         if: steps.guard.outputs.ready == 'true'
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.ready == 'true'
