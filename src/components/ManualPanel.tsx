@@ -1,10 +1,13 @@
 /**
  * 中栏：作战手册。
  *
- * 一条技术 = 一段定义 + 命令模板（每条可单独复制）+ 常见坑（>2 条折叠）+ 参考链接。
+ * 一条技术 = 定义 + 详情 + 原理 + 命令模板（每条可单独复制）+ 操作步骤 + 常见坑（>2 条折叠）+ 参考链接。
  * 领域节点退化成「领域概览」（子领域 + 技术清单），工具/载体退化成属性卡。
  *
  * 空状态不是一句「请选择」：它给出全局统计和三个下一步动作，避免打开就一片黑。
+ *
+ * v4：detail / principle / procedure 只有 techniques 才有，且早期试点技术整体缺失。
+ * 缺失时**整块不渲染**（返回 null），不留空标题 —— 类型上就是可选字段，组件不猜内容。
  */
 import { useState } from 'react';
 import { cn } from '../lib/cn';
@@ -15,6 +18,12 @@ import type { AtlasTree } from '../lib/tree';
 import type { ArtifactKindTable, AtlasNode } from '../lib/types';
 import { ChevronIcon, ExternalIcon } from './icons';
 import { CopyButton, CountPill, DifficultyMeter, EmptyBlock, Kbd, KindBadge, SectionHeading } from './ui';
+
+/** detail 超过这个字数就折叠：3 行 clamp 大约就是 200 字上下 */
+const DETAIL_CLAMP_CHARS = 300;
+
+/** 操作步骤的序号。用圈码而不是 01/02，和「常见坑」的两位数字编号区分开 */
+const CIRCLED_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'];
 
 export interface ManualStats {
   domains: number;
@@ -70,7 +79,7 @@ function PitfallSection({ node }: { node: AtlasNode }) {
 
   if (pitfalls.length === 0) {
     return (
-      <section>
+      <section className="manual-section">
         <SectionHeading right={<CountPill value={0} tone="dim" />}>常见坑</SectionHeading>
         <EmptyBlock title="暂无常见坑记录" hint="数据里这条技术没有登记 pitfalls，不代表没有坑，只代表还没人写下来。" />
       </section>
@@ -82,7 +91,7 @@ function PitfallSection({ node }: { node: AtlasNode }) {
   const hidden = pitfalls.length - visible.length;
 
   return (
-    <section>
+    <section className="manual-section">
       <SectionHeading right={<CountPill value={pitfalls.length} />}>常见坑</SectionHeading>
       <ul className="divide-y divide-border/50 rounded border border-border bg-panel/50">
         {visible.map((pitfall, index) => (
@@ -108,12 +117,84 @@ function PitfallSection({ node }: { node: AtlasNode }) {
   );
 }
 
+/** 详情：普通正文段落。>200 字折叠成 3 行，给「展开全文」；不做复制按钮，选中即可复制 */
+function DetailSection({ node }: { node: AtlasNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const detail = node.detail ?? '';
+  if (detail === '') return null;
+
+  const collapsible = detail.length > DETAIL_CLAMP_CHARS;
+  const clamped = collapsible && !expanded;
+
+  return (
+    <section className="manual-section">
+      <SectionHeading right={<span className="font-mono text-11 text-fg-muted">{detail.length} 字</span>}>详情</SectionHeading>
+      <p className={cn('max-w-[82ch] text-13 leading-[1.75] text-fg-dim', clamped && 'line-clamp-3')}>{detail}</p>
+      {collapsible && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          className="mt-1.5 inline-flex items-center gap-1 text-11 text-fg-muted transition-colors hover:text-accent-soft"
+        >
+          <span className={cn('inline-block transition-transform', expanded && 'rotate-[-90deg]')} aria-hidden>
+            <ChevronIcon />
+          </span>
+          {expanded ? '收起' : '展开全文'}
+        </button>
+      )}
+    </section>
+  );
+}
+
+/**
+ * 原理：解释「为什么有效」，不是可执行动作。
+ * 左侧霓虹竖线 + 略暗背景 + 内发光，和命令行（可复制）、步骤（可执行）在视觉上分层。
+ */
+function PrincipleSection({ node }: { node: AtlasNode }) {
+  const principle = node.principle ?? '';
+  if (principle === '') return null;
+
+  return (
+    <section className="manual-section">
+      <SectionHeading tone="accent" right={<span className="font-mono text-11 text-fg-muted">为什么有效</span>}>
+        原理
+      </SectionHeading>
+      <div className="principle-block">
+        <p className="max-w-[82ch] text-13 leading-[1.8] text-fg-dim">{principle}</p>
+      </div>
+    </section>
+  );
+}
+
+/** 操作步骤：有序，圈码序号走等宽字体，左侧一条轨道线把步骤串起来 */
+function ProcedureSection({ node }: { node: AtlasNode }) {
+  const procedure = node.procedure ?? [];
+  if (procedure.length === 0) return null;
+
+  return (
+    <section className="manual-section">
+      <SectionHeading right={<CountPill value={procedure.length} />}>操作步骤</SectionHeading>
+      <ol className="manual-steps">
+        {procedure.map((step, index) => (
+          <li key={`${index}-${step.slice(0, 12)}`} className="manual-step">
+            <span className="manual-step-glyph" aria-hidden>
+              {CIRCLED_NUMBERS[index] ?? String(index + 1)}
+            </span>
+            <p className="min-w-0 flex-1 text-12 leading-[1.7] text-fg-dim">{step}</p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function CommandSection({ node }: { node: AtlasNode }) {
   const commands = node.commands ?? [];
 
   if (commands.length === 0) {
     return (
-      <section>
+      <section className="manual-section">
         <SectionHeading right={<CountPill value={0} tone="dim" />}>命令模板</SectionHeading>
         <EmptyBlock
           title="该条目暂无命令模板"
@@ -126,7 +207,7 @@ function CommandSection({ node }: { node: AtlasNode }) {
   const all = commands.map((command) => command.cmd).join('\n');
 
   return (
-    <section>
+    <section className="manual-section">
       <SectionHeading
         right={
           <div className="flex items-center gap-2">
@@ -168,7 +249,7 @@ function ReferenceSection({ node }: { node: AtlasNode }) {
   if (references.length === 0) return null;
 
   return (
-    <section>
+    <section className="manual-section">
       <SectionHeading right={<CountPill value={references.length} />}>参考链接</SectionHeading>
       <ul className="space-y-1">
         {references.map((url) => (
@@ -201,7 +282,7 @@ function SiblingSection({ node, tree, onSelect }: { node: AtlasNode; tree: Atlas
   if (siblings.length === 0) return null;
 
   return (
-    <section>
+    <section className="manual-section">
       <SectionHeading right={<CountPill value={siblings.length} tone="dim" />}>
         同{entry?.depth === 0 ? '领域' : '子领域'}其它技术
       </SectionHeading>
@@ -238,6 +319,7 @@ function TechniqueManual({
   const commandCount = node.commands?.length ?? 0;
   const pitfallCount = node.pitfalls?.length ?? 0;
   const referenceCount = node.references?.length ?? 0;
+  const procedureCount = node.procedure?.length ?? 0;
 
   return (
     <>
@@ -263,6 +345,7 @@ function TechniqueManual({
 
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/50 pt-2">
           <StatChip label="命令" value={commandCount} />
+          {procedureCount > 0 && <StatChip label="步骤" value={procedureCount} />}
           <StatChip label="常见坑" value={pitfallCount} />
           <StatChip label="参考" value={referenceCount} />
           <StatChip label="关联工具" value={relations.tools.length} />
@@ -270,7 +353,10 @@ function TechniqueManual({
       </header>
 
       <div className="space-y-5 px-6 py-4">
+        <DetailSection node={node} />
+        <PrincipleSection node={node} />
         <CommandSection node={node} />
+        <ProcedureSection node={node} />
         <PitfallSection key={node.id} node={node} />
         <ReferenceSection node={node} />
         <SiblingSection node={node} tree={tree} onSelect={onSelect} />

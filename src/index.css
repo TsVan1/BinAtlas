@@ -375,6 +375,91 @@
   }
 }
 
+/* -------------------------------------------------------------------------
+ * 作战手册 v2：详情 / 原理 / 操作步骤
+ *
+ * 三个区块承担不同职责，所以给三种不同的「形状」：
+ *   详情      普通正文（无框，靠排印和行距）
+ *   原理      左侧霓虹竖线 + 略暗背景 + 内发光 = 解释性，不是动作
+ *   操作步骤  圈码 + 左侧轨道线 = 有序执行；与「常见坑」的 01/02 编号区分
+ * 区块之间的分隔线用相邻兄弟选择器：缺失的区块不渲染，线自然跟着走，不会出现双线。
+ * ---------------------------------------------------------------------- */
+.manual-section + .manual-section {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+  padding-top: 14px;
+}
+
+.principle-block {
+  position: relative;
+  padding: 9px 13px 10px 16px;
+  border: 1px solid rgba(34, 211, 238, 0.14);
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.07), rgba(11, 15, 20, 0.55));
+  box-shadow: inset 0 0 34px -26px rgba(34, 211, 238, 1);
+}
+
+/* 竖线是「原理」唯一的强色块：一眼看出它和命令行、步骤不是一种东西 */
+.principle-block::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 14px -1px rgba(34, 211, 238, 0.85);
+}
+
+.manual-steps {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manual-step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding-bottom: 11px;
+}
+
+.manual-step:last-child {
+  padding-bottom: 0;
+}
+
+/* 轨道线：从本步序号下方连到下一步，最后一步不画 */
+.manual-step::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 19px;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.32), rgba(34, 211, 238, 0.08));
+}
+
+.manual-step:last-child::before {
+  display: none;
+}
+
+.manual-step-glyph {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: 0 0 18px;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--color-accent-soft);
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.5);
+}
+
 .fade-up {
   animation: fade-up var(--dur-base) var(--ease-enter);
 }

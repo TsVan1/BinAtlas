@@ -14,6 +14,13 @@
  * v3（投影层补齐，替代此前的旁路表与边推导）：
  *   `artifact_kind` artifact 节点的载体类别（§2.5 的 12 值；不能叫 kind，kind 是节点类型）
  *   `prerequisites` technique 的前置技术 id 数组
+ *
+ * v4（作战手册补全「照着就能干」的三块，只挂在 technique 上）：
+ *   `detail`     详情正文：什么时候用、和相邻技术的边界、代价
+ *   `principle`  原理：为什么有效（解释性，不是步骤）
+ *   `procedure`  操作步骤（有序）
+ *   早期试点技术没有这三个字段 —— 缺失是**正常状态**，组件必须整块不渲染，
+ *   不许出现空标题。这里全部声明为可选，就是为了让「缺失」在类型层面就成立。
  */
 
 /** 一条命令模板：`cmd` 是可直接复制的原文，`note` 说明为什么要这么跑 */
@@ -49,6 +56,12 @@ export interface AtlasNode {
   commands?: AtlasCommand[];
   /** 作战手册：常见坑 */
   pitfalls?: string[];
+  /** 作战手册：详情正文（适用场景 / 与相邻技术的边界 / 代价） */
+  detail?: string;
+  /** 作战手册：原理 —— 为什么有效。解释性文本，与 procedure 的步骤性相对 */
+  principle?: string;
+  /** 作战手册：操作步骤，有序；每一步是一个可执行动作 */
+  procedure?: string[];
   /** 参考链接 */
   references?: string[];
   /** 载体类别（§2.5 枚举）；只出现在 artifact 节点上 */

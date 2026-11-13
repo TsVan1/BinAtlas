@@ -153,6 +153,16 @@ function parseNodes(raw: unknown): ParseResult<AtlasNode> {
     const pitfalls = readNonEmptyStrings(entry['pitfalls']);
     if (pitfalls.length > 0) node.pitfalls = pitfalls;
 
+    // v4：作战手册的详情 / 原理 / 操作步骤。试点技术没有这三块，缺了就当没有
+    const detail = readString(entry['detail']).trim();
+    if (detail !== '') node.detail = detail;
+
+    const principle = readString(entry['principle']).trim();
+    if (principle !== '') node.principle = principle;
+
+    const procedure = readNonEmptyStrings(entry['procedure']);
+    if (procedure.length > 0) node.procedure = procedure;
+
     const references = readNonEmptyStrings(entry['references']);
     if (references.length > 0) node.references = references;
 
