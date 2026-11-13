@@ -12,6 +12,23 @@ export function charCount(s: string): number {
   return Array.from(String(s).replace(/\s+/g, '')).length;
 }
 
+/**
+ * 终端里的显示宽度：CJK / 全角字符按 2 列算，其余按 1 列。
+ * `pad()` 依赖它，否则中文表头的列会歪。
+ */
+const WIDE = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/;
+
+export function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += WIDE.test(ch) ? 2 : 1;
+  return w;
+}
+
+/** 按显示宽度右补空格（表格对齐用） */
+export function pad(s: string, width: number): string {
+  return s + ' '.repeat(Math.max(0, width - displayWidth(s)));
+}
+
 /** 相对 cwd 的展示路径；跨盘/跨根时退回绝对路径 */
 export function displayPath(absPath: string, cwd: string): string {
   const rel = path.relative(cwd, absPath);

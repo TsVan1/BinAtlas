@@ -1,0 +1,1035 @@
+{
+  "generatedAt": "2026-11-13T04:59:15.589Z",
+  "schemaVersion": "1.0.0",
+  "dataDir": "data/",
+  "totals": {
+    "nodes": 57,
+    "edges": 0,
+    "byKind": {
+      "domain": 3,
+      "technique": 15,
+      "tool": 20,
+      "concept": 0,
+      "format": 0,
+      "attack": 0,
+      "ecosystem": 0,
+      "ai": 0,
+      "artifact": 19
+    },
+    "domain": 3,
+    "technique": 15,
+    "tool": 20,
+    "artifact": 19
+  },
+  "domains": [
+    {
+      "id": "dom:firmware",
+      "name": "固件与嵌入式安全",
+      "coverage": "partial",
+      "tools": 10,
+      "techniques": 5,
+      "artifacts": 12,
+      "matrix": {
+        "filled": 12,
+        "total": 60,
+        "ratio": 0.2
+      },
+      "belowThreshold": [
+        "组合覆盖 20.0% < 30%"
+      ],
+      "coverageMismatch": null
+    },
+    {
+      "id": "dom:mobile",
+      "name": "移动安全",
+      "coverage": "partial",
+      "tools": 9,
+      "techniques": 5,
+      "artifacts": 16,
+      "matrix": {
+        "filled": 14,
+        "total": 60,
+        "ratio": 0.23333333333333334
+      },
+      "belowThreshold": [
+        "组合覆盖 23.3% < 30%"
+      ],
+      "coverageMismatch": null
+    },
+    {
+      "id": "dom:malware-analysis",
+      "name": "恶意软件分析",
+      "coverage": "partial",
+      "tools": 19,
+      "techniques": 5,
+      "artifacts": 17,
+      "matrix": {
+        "filled": 16,
+        "total": 60,
+        "ratio": 0.26666666666666666
+      },
+      "belowThreshold": [
+        "组合覆盖 26.7% < 30%"
+      ],
+      "coverageMismatch": null
+    }
+  ],
+  "matrix": {
+    "columns": [
+      "executable",
+      "library",
+      "package",
+      "bytecode",
+      "firmware",
+      "kernel-object",
+      "runtime-dump",
+      "capture",
+      "document",
+      "script",
+      "shellcode",
+      "container"
+    ],
+    "rows": [
+      {
+        "technique": "tech:firmware-extraction",
+        "name": "固件提取与解包",
+        "domains": [
+          "dom:firmware"
+        ],
+        "cells": {
+          "executable": 1,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 2,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 1,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "name": "固件仿真",
+        "domains": [
+          "dom:firmware"
+        ],
+        "cells": {
+          "executable": 2,
+          "library": 1,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 1,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "name": "UEFI 固件分析",
+        "domains": [
+          "dom:firmware"
+        ],
+        "cells": {
+          "executable": 0,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 2,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "name": "硬编码凭据挖掘",
+        "domains": [
+          "dom:firmware"
+        ],
+        "cells": {
+          "executable": 1,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 1,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 1,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "name": "固件版本差分",
+        "domains": [
+          "dom:firmware"
+        ],
+        "cells": {
+          "executable": 1,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 2,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "name": "移动应用静态分析",
+        "domains": [
+          "dom:mobile"
+        ],
+        "cells": {
+          "executable": 1,
+          "library": 1,
+          "package": 3,
+          "bytecode": 1,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "name": "移动端运行时插桩",
+        "domains": [
+          "dom:mobile"
+        ],
+        "cells": {
+          "executable": 0,
+          "library": 1,
+          "package": 2,
+          "bytecode": 1,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "name": "移动应用加固脱壳",
+        "domains": [
+          "dom:mobile"
+        ],
+        "cells": {
+          "executable": 0,
+          "library": 1,
+          "package": 1,
+          "bytecode": 1,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "name": "移动流量拦截",
+        "domains": [
+          "dom:mobile"
+        ],
+        "cells": {
+          "executable": 0,
+          "library": 0,
+          "package": 1,
+          "bytecode": 0,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 1,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "name": "Android 组件暴露面审计",
+        "domains": [
+          "dom:mobile"
+        ],
+        "cells": {
+          "executable": 0,
+          "library": 0,
+          "package": 1,
+          "bytecode": 1,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "name": "样本静态研判",
+        "domains": [
+          "dom:malware-analysis"
+        ],
+        "cells": {
+          "executable": 3,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 1,
+          "script": 1,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "name": "行为动态分析",
+        "domains": [
+          "dom:malware-analysis"
+        ],
+        "cells": {
+          "executable": 2,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 1,
+          "capture": 1,
+          "document": 0,
+          "script": 1,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "name": "可执行体脱壳",
+        "domains": [
+          "dom:malware-analysis"
+        ],
+        "cells": {
+          "executable": 2,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 0,
+          "script": 0,
+          "shellcode": 1,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "name": "检测特征编写",
+        "domains": [
+          "dom:malware-analysis"
+        ],
+        "cells": {
+          "executable": 3,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 0,
+          "capture": 0,
+          "document": 1,
+          "script": 1,
+          "shellcode": 0,
+          "container": 0
+        }
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "name": "家族归因与聚类",
+        "domains": [
+          "dom:malware-analysis"
+        ],
+        "cells": {
+          "executable": 2,
+          "library": 0,
+          "package": 0,
+          "bytecode": 0,
+          "firmware": 0,
+          "kernel-object": 0,
+          "runtime-dump": 1,
+          "capture": 0,
+          "document": 1,
+          "script": 1,
+          "shellcode": 0,
+          "container": 0
+        }
+      }
+    ],
+    "filled": 42,
+    "total": 180,
+    "ratio": 0.23333333333333334,
+    "zeroCells": [
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:firmware-extraction",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:firmware-emulation",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "executable"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:uefi-firmware-analysis",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:hardcoded-credential-mining",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:firmware-diffing",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:mobile-app-static-analysis",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "executable"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:mobile-runtime-instrumentation",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "executable"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:mobile-app-unpacking",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "executable"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:network-traffic-interception",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "executable"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:android-component-surface-audit",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:malware-static-triage",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:behavioral-dynamic-analysis",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "document"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "script"
+      },
+      {
+        "technique": "tech:executable-unpacking",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "runtime-dump"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:detection-signature-authoring",
+        "kind": "container"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "library"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "package"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "bytecode"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "firmware"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "kernel-object"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "capture"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "shellcode"
+      },
+      {
+        "technique": "tech:malware-family-attribution",
+        "kind": "container"
+      }
+    ]
+  },
+  "provenance": {
+    "unverified": {
+      "numerator": 0,
+      "denominator": 57,
+      "ratio": 0,
+      "threshold": 0.15,
+      "pass": true
+    },
+    "tldrShort": {
+      "numerator": 0,
+      "denominator": 20,
+      "ratio": 0,
+      "threshold": 0.1,
+      "pass": true,
+      "minChars": 40,
+      "toolsWithTldr": 20
+    },
+    "sourceMissing": {
+      "count": 0,
+      "ids": []
+    },
+    "verifiedAtMissing": {
+      "count": 0,
+      "ids": []
+    }
+  },
+  "aiReady": {
+    "distribution": {
+      "none": 0,
+      "api": 13,
+      "plugin": 0,
+      "mcp": 7
+    },
+    "unset": 37,
+    "applicable": 20
+  },
+  "maintainStatus": {
+    "distribution": {
+      "active": 19,
+      "stale": 1,
+      "abandoned": 0,
+      "unknown": 0
+    },
+    "unset": 37,
+    "abandonedOrStale": [
+      {
+        "id": "tool:unicorn",
+        "name": "Unicorn",
+        "status": "stale",
+        "category": "instrumentation",
+        "license": "oss",
+        "verified_at": "2026-11-13"
+      }
+    ]
+  },
+  "thresholds": {
+    "toolsPerDomain": 5,
+    "techniquesPerDomain": 5,
+    "matrixCoverage": 0.3,
+    "unverifiedMax": 0.15,
+    "tldrShortMax": 0.1,
+    "tldrMinChars": 40
+  },
+  "gaps": [
+    "边库为空（0 条）：技术前置 / 工具归属关系都未建立，图谱只能渲染孤岛，P1 阶段的第一优先级",
+    "载体 kind 尚无条目（矩阵整列为 0）：kernel-object · container",
+    "技术×载体 组合覆盖 23.3%（42/180 格），0 覆盖 138 格"
+  ]
+}

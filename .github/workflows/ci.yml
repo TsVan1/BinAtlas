@@ -76,9 +76,10 @@ jobs:
         if: steps.guard.outputs.ready == 'true'
         run: pnpm validate
 
-      - name: 类型检查（图数据构建尚未实现，暂以 typecheck 代替）
+      # build = typecheck + validate（同一套 Zod）+ 图数据产物；任何一步失败都 exit 1
+      - name: 构建（类型检查 + 图数据）
         if: steps.guard.outputs.ready == 'true'
-        run: pnpm typecheck
+        run: pnpm build
 
       - name: 测试
         if: steps.guard.outputs.ready == 'true'

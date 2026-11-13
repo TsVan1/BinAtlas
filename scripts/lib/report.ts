@@ -3,6 +3,7 @@
  * 格式要点（§6）：每条 finding 都是「文件:行号 · 字段 · 期望 · 实际」。
  */
 import { RULE_TITLES, formatFinding, type Finding } from './finding.js';
+import { displayWidth, pad } from './text.js';
 import type { ValidateResult } from './validate.js';
 
 export interface RenderOptions {
@@ -12,18 +13,6 @@ export interface RenderOptions {
   warningLimit?: number;
   dataLabel: string;
   command: string;
-}
-
-const WIDE = /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/;
-
-function displayWidth(s: string): number {
-  let w = 0;
-  for (const ch of s) w += WIDE.test(ch) ? 2 : 1;
-  return w;
-}
-
-function pad(s: string, width: number): string {
-  return s + ' '.repeat(Math.max(0, width - displayWidth(s)));
 }
 
 const TYPE_LABEL: Record<string, string> = {

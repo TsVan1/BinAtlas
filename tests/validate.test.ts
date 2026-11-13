@@ -41,7 +41,7 @@ function fingerprint(dirAbs: string): string {
 // 真实数据
 // ---------------------------------------------------------------------------
 
-test('真实 data/：0 个 error（warning 不阻断）', () => {
+test('真实 data/：0 个 error，且统计口径自洽（不写死条数——数据在并行增长）', () => {
   const dataDir = path.join(ROOT, 'data');
   const before = fingerprint(dataDir);
   const result = run(dataDir);
@@ -52,23 +52,29 @@ test('真实 data/：0 个 error（warning 不阻断）', () => {
     [],
     `真实 data/ 不应有 error，实际有：\n${result.errors.map(formatFinding).join('\n')}`,
   );
-  assert.equal(result.stats.nodeCount, 37, '当前应为 3 领域 + 15 技术 + 19 载体');
-  assert.equal(result.stats.edgeCount, 0, 'data/edges 目前为空');
   assert.equal(before, after, '校验器不许修改 data/ 下任何文件');
-  // V11 新语义（§6）：载体靠 artifacts 字段被引用即算关联，19 个载体不应再被判孤立
+
+  // 统计口径自洽：文件条数 = 节点 + 边；类型分布之和 = 节点数；领域行数 = domain 节点数
+  const fileTotal = result.files.reduce((sum, f) => sum + f.count, 0);
+  assert.equal(fileTotal, result.stats.nodeCount + result.stats.edgeCount, '文件条数应等于节点数 + 边数');
+  const byTypeSum = Object.values(result.stats.byType).reduce((a, b) => a + b, 0);
+  assert.equal(byTypeSum, result.stats.nodeCount, 'byType 之和应等于节点数');
+  assert.equal(result.stats.domains.length, result.stats.byType.domain ?? 0, '领域表行数应等于 domain 节点数');
+
+  // V11 只针对非 domain 节点（规则语义），且载体靠 artifacts 字段被引用即算关联（§6）
   const v11 = result.warnings.filter((w) => w.rule === 'V11');
+  assert.ok(!v11.some((w) => w.locator.startsWith('domain.')), 'domain 不参与 V11');
   assert.equal(
     v11.filter((w) => w.locator.startsWith('artifact.')).length,
     0,
-    `载体不应再被判孤立（它们被 artifacts 字段引用）：\n${v11.map(formatFinding).join('\n')}`,
+    `载体不应被判孤立（它们被 artifacts 字段引用）：\n${v11.map(formatFinding).join('\n')}`,
   );
-  assert.equal(
-    v11.length,
-    9,
-    `当前只剩 9 条「技术孤立」：全库没有任何节点的字段整串引用它们，等 A3 的边来连。实际：\n${v11.map(formatFinding).join('\n')}`,
-  );
-  assert.equal(result.warnings.length, 12, '12 = V11×9 + V14×3');
-  assert.ok(result.warnings.some((w) => w.rule === 'V14'), '应出现 V14 领域工具数不足警告');
+
+  // 真实数据只可能触发这四条警告规则；出现别的规则说明规则实现串了
+  const allowedWarnings = new Set(['V11', 'V12', 'V13', 'V14']);
+  for (const w of result.warnings) {
+    assert.ok(allowedWarnings.has(w.rule), `真实 data/ 出现了非预期警告：${formatFinding(w)}`);
+  }
 });
 
 // ---------------------------------------------------------------------------

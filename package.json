@@ -11,6 +11,8 @@
   "scripts": {
     "validate": "tsx scripts/validate.ts",
     "build": "tsx scripts/build.ts",
+    "build:graph": "tsx scripts/build-graph.ts",
+    "stats": "tsx scripts/stats.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

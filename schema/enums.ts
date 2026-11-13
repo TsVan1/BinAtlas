@@ -4,6 +4,15 @@
  * 这里出现的每个取值都必须在规范里有出处，禁止在此处「顺手加一个」。
  */
 
+/**
+ * 数据规范版本（对应 03-DATA-SCHEMA.md）。
+ *
+ * 递增规则：**破坏性字段变更**（删字段、改枚举取值、改语义）→ major；
+ * 只加可选字段 → minor。产物写进 `public/graph/meta.json` 的 `schemaVersion`，
+ * 前端可据此拒绝加载与代码不匹配的旧产物，而不是渲染出一堆 undefined。
+ */
+export const SCHEMA_VERSION = '1.0.0';
+
 /** §1 ID 前缀：只能是 9 个之一 */
 export const NODE_PREFIXES = ['tool', 'tech', 'art', 'dom', 'con', 'fmt', 'atk', 'eco', 'ai'] as const;
 export type NodePrefix = (typeof NODE_PREFIXES)[number];
