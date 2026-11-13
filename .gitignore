@@ -16,3 +16,6 @@ github.env
 # 内部资料：AI Agent 编排与提示词，不对外发布
 _internal/
 AGENTS.md
+
+# 一次性脚本，不入库
+.tmp-*

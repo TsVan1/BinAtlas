@@ -103,12 +103,14 @@ test('build-graph：4 个文件都是合法 JSON，字段齐、条数自洽、�
     assert.notEqual(tool.def, '', `${tool.id} 的 def 为空：tool 的 def 应从 tldr 回落`);
   }
 
-  // 边：data/edges/ 现在为空 → 空数组 + meta 有说明（不是静默的空）
-  assert.deepEqual(edges, [], 'data/edges/ 为空时 edges.json 必须是空数组');
-  assert.ok(
-    meta.warnings.some((w) => w.includes('边库为空')),
-    `边库为空时 meta.warnings 必须说明，实际：${JSON.stringify(meta.warnings)}`,
-  );
+  // 边：data/edges/ 会随内容增长，**不能假定空/非空**。
+  // 只校验「空库时必须给出说明」这一条不变量；条数与 meta 的自洽由上面的断言覆盖。
+  if (edges.length === 0) {
+    assert.ok(
+      meta.warnings.some((w) => w.includes('边库为空')),
+      `边库为空时 meta.warnings 必须说明，实际：${JSON.stringify(meta.warnings)}`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
