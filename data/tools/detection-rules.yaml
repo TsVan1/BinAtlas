@@ -1,0 +1,76 @@
+# BinAtlas 知识库 · 工具 · detection-rules（YARA / 检测规则）
+# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 9
+# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+
+- id: tool:yara
+  name: YARA
+  aliases: [yara-python, yarac]
+  category: detection-rules
+  domain:
+    - dom:malware-analysis
+    - dom:mobile
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:elf64
+    - art:memory-dump
+    - art:document
+    - art:script
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 3
+  maintain_status: active
+  first_release: 2008
+  latest_version: "4.6.0"
+  url: https://virustotal.github.io/yara/
+  source:
+    - https://github.com/VirusTotal/yara
+    - https://virustotal.github.io/yara/
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决"把分析结论固化成可批量扫描特征"的问题：用字节串、结构约束与条件组合写成规则，扫文件、进程内存或流量载荷都走同一套语法。
+    适合样本家族的特征化、内存中已解密载荷的定位、以及把逆向结论交付给检测与应急侧做批扫。
+    短板是规则质量完全取决于作者，过泛立刻误报成灾、过窄一次版本更新即失效；纯字节匹配对加壳与混淆样本基本无效，必须配合分析工具使用。
+  note: 官方提供 yara-python 与 CLI（yara/yarac）；官方未提供 MCP，社区曾出现 YaraFlux 等包装但链接已失效。
+
+- id: tool:capa
+  name: capa
+  aliases: [Mandiant capa, capa explorer]
+  category: detection-rules
+  domain:
+    - dom:malware-analysis
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:pe-dotnet
+    - art:elf64
+    - art:memory-dump
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 3
+  maintain_status: active
+  first_release: 2020
+  latest_version: "10.0.0"
+  url: https://github.com/mandiant/capa
+  source:
+    - https://github.com/mandiant/capa
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决"样本能做什么"要人工逐条读汇编的问题：用规则把 API 组合、字符串与结构特征匹配成高层能力标签，直接给出进程注入、持久化、反调试等结论。
+    适合恶意样本初判、批量样本的能力画像与家族聚类，以及给报告提供可复核的能力清单。
+    短板是能力判定依赖规则覆盖面，未收录的手法会漏报；对加壳样本与自研壳基本失效，须先脱壳；规则命中是"具备该能力"的证据，不等于已实际执行。
+  note: 提供 CLI 与 Python 模块，可接进批量流水线；不适合直接对混淆或 VM 保护样本下结论。

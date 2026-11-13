@@ -1,0 +1,70 @@
+# BinAtlas 知识库 · 工具 · network-protocol（网络与协议逆向）
+# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 15
+# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+
+- id: tool:wireshark
+  name: Wireshark
+  aliases: [tshark, dumpcap]
+  category: network-protocol
+  domain:
+    - dom:malware-analysis
+    - dom:mobile
+  artifacts:
+    - art:pcap
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 3
+  maintain_status: active
+  first_release: 1998
+  latest_version: "4.6.9"
+  url: https://www.wireshark.org/
+  source:
+    - https://www.wireshark.org/
+    - https://gitlab.com/wireshark/wireshark
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决"流量里到底发生了什么"要看协议逐字段还原的问题：上千个协议解析器把抓包展开到字段层，还能用显示过滤器、流追踪与 TLS 解密把行为串起来。
+    适合恶意样本的 C2 通信分析、移动应用接口与协议结构还原、以及加密流量下靠元数据做行为判定。
+    短板是加密流量只能看到连接时序与 SNI 一类元数据，私有二进制协议仍需人工或脚本推断字段边界；大文件与高包速场景下界面吃力，吞吐要靠 tshark 而非 GUI。
+  note: 稳定版为 4.6 分支（4.6.9）；5.0.0 目前仅是开发版 rc。脚本入口是 tshark/dumpcap；官方无 MCP，社区有 WireMCP 等包装。
+
+- id: tool:burp-suite
+  name: Burp Suite
+  aliases: [Burp, Burp Suite Professional, Burp Community]
+  category: network-protocol
+  domain:
+    - dom:mobile
+    - dom:malware-analysis
+  artifacts:
+    - art:apk
+    - art:pcap
+  license: commercial
+  pricing: Community 版免费；Professional 与 Enterprise 为付费许可
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: false
+  learning_curve: 3
+  maintain_status: active
+  first_release: 2003
+  latest_version: "2026.10.1"
+  url: https://portswigger.net/burp
+  source:
+    - https://portswigger.net/burp
+    - https://github.com/PortSwigger/mcp-server
+  verified_at: 2026-11-13
+  headless: partial
+  ai_ready: mcp
+  tldr: >-
+    解决"请求发出前后要能改"的问题：作为中间人代理拦截并改写 HTTP(S) 报文，配合重放、扫描与插件在应用层验证越权、参数篡改与逻辑缺陷。
+    适合移动应用接口的批量重放与越权验证、样本回连 C2 的流量改包实验，以及需要把发现整理成可复核材料的渗透项目。
+    短板是证书固定与双向认证场景必须先绕过客户端校验才能看到明文，桌面版依赖 GUI，无界面批量扫描要自建调度，完整的自动化能力主要在企业版。
+  note: 官方 PortSwigger/mcp-server 提供 MCP 入口；桌面扩展走 Montoya API（Java/Kotlin），无官方 Python SDK。

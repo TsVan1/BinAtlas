@@ -1,0 +1,35 @@
+# BinAtlas 知识库 · 工具 · memory-forensics（内存取证）
+# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 14
+# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+
+- id: tool:volatility3
+  name: Volatility 3
+  aliases: [Volatility, vol3, vol.py]
+  category: memory-forensics
+  domain:
+    - dom:malware-analysis
+  artifacts:
+    - art:memory-dump
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 4
+  maintain_status: active
+  first_release: null
+  latest_version: "2.28.2"
+  url: https://www.volatilityfoundation.org/
+  source:
+    - https://github.com/volatilityfoundation/volatility3
+    - https://www.volatilityfoundation.org/
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决加壳样本在内存里已解密、磁盘上却看不到的问题：从内存镜像里重建进程、模块与网络连接结构，直接提取明文代码段、注入痕迹与凭据残留。
+    适合恶意样本的进程注入与无文件攻击取证、已解密密载荷的转储，以及事后调查中重建当时的运行状态。
+    短板是强依赖目标系统的符号表（ISF）与版本匹配，缺符号时多数插件跑不起来；内存镜像获取本身需要管理员权限与工具配合，镜像质量差会连带结论失真。
+  note: 3.x 是重写版，插件 API 与 2.x 不兼容；提供 Python API 与 CLI，可接入批量分析流水线。无 MCP。

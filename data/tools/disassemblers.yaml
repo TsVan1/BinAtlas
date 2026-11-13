@@ -1,0 +1,165 @@
+# BinAtlas 知识库 · 工具 · disassemblers（反汇编/反编译）
+# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 1
+# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+
+- id: tool:ida-pro
+  name: IDA Pro
+  aliases: [IDA, Interactive Disassembler]
+  category: disassemblers
+  domain:
+    - dom:malware-analysis
+    - dom:firmware
+    - dom:mobile
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:elf32
+    - art:elf64
+    - art:mach-o
+    - art:so
+    - art:firmware-image
+    - art:uefi-bios
+  license: commercial
+  pricing: 商业付费许可按席位报价；另有功能受限的 IDA Free 免费版
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: false
+  learning_curve: 4
+  maintain_status: active
+  first_release: null
+  latest_version: "9.5"
+  url: https://hex-rays.com/ida-pro
+  source:
+    - https://hex-rays.com/ida-pro
+    - https://docs.hex-rays.com/
+  verified_at: 2026-11-13
+  headless: partial
+  ai_ready: mcp
+  tldr: >-
+    解决大二进制要长期维护同一份分析工程的问题：反编译器把机器码还原成可读 C 代码，交叉引用、类型与结构体重建让结论能跨会话累积而不必每次重读汇编。
+    适合恶意样本深度分析、固件服务逆向、闭源库行为审计这类要连续数周推进、结论必须可回溯的场景。
+    短板是完整功能许可成本高、免费版功能受限，批处理依赖 idat/idat64，团队协作与服务化能力弱于脚本优先的竞品。
+  note: 社区 ida-pro-mcp 可把反编译与交叉引用暴露给 LLM 客户端；9.5 起官方强调 agent 集成，但 MCP 仍非官方内置。
+
+- id: tool:ghidra
+  name: Ghidra
+  aliases: [Ghidra SRE, NSA Ghidra]
+  category: disassemblers
+  domain:
+    - dom:malware-analysis
+    - dom:firmware
+    - dom:mobile
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:elf32
+    - art:elf64
+    - art:mach-o
+    - art:so
+    - art:firmware-image
+    - art:uefi-bios
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 3
+  maintain_status: active
+  first_release: 2019
+  latest_version: "12.2"
+  url: https://ghidra-sre.org/
+  source:
+    - https://github.com/NationalSecurityAgency/ghidra
+    - https://ghidra-sre.org/
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: mcp
+  tldr: >-
+    解决没有预算也要做多架构反编译的问题：反编译质量接近商业工具，脚本接口完整，固件里的冷门架构也能靠处理器模块覆盖。
+    适合预算受限的团队、需要批量 headless 扫描样本的场景，以及要审计反编译算法本身是否可信的研究型工作。
+    短板是大型二进制首次分析明显慢于 IDA、UI 响应重，复杂 C++ 类型恢复仍有差距，处理器模块质量参差不齐。
+  note: 官方提供 analyzeHeadless 与脚本接口，批量分析可完全无界面；GhidraMCP 等社区 MCP 可接 LLM。
+
+- id: tool:binary-ninja
+  name: Binary Ninja
+  aliases: [Binja, BinaryNinja]
+  category: disassemblers
+  domain:
+    - dom:malware-analysis
+    - dom:firmware
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:elf32
+    - art:elf64
+    - art:mach-o
+    - art:firmware-image
+  license: commercial
+  pricing: 商业付费许可按档位报价；另有功能受限的免费版 Binary Ninja Free
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: false
+  learning_curve: 3
+  maintain_status: active
+  first_release: 2016
+  latest_version: "unknown"
+  url: https://binary.ninja/
+  source:
+    - https://binary.ninja/
+    - https://github.com/Vector35/binaryninja-api
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: mcp
+  tldr: >-
+    解决静态分析与自动化脚本要共用一套数据结构的问题：IL 分层（MLIL/HLIL）明确，Python API 与 headless 模式让批量反编译、函数特征提取可以直接写成流水线。
+    适合需要把反汇编结果接进自有分析服务、或要在 IL 层做模式匹配与相似性比对的团队。
+    短板是商业授权按档位收费、免费版功能受限，社区插件生态规模不及 IDA，冷门架构支持不如 Ghidra 广。
+  note: 官方 API 仓库公开；社区 binary_ninja_mcp 提供 MCP 入口，商业侧另有 Sidekick 类 LLM 功能。
+
+- id: tool:radare2
+  name: radare2
+  aliases: [r2, radare]
+  category: disassemblers
+  domain:
+    - dom:malware-analysis
+    - dom:firmware
+    - dom:mobile
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:elf32
+    - art:elf64
+    - art:mach-o
+    - art:so
+    - art:firmware-image
+    - art:apk
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+    - android
+  oss: true
+  learning_curve: 4
+  maintain_status: active
+  first_release: null
+  latest_version: "6.2.6"
+  url: https://www.radare.org/
+  source:
+    - https://github.com/radareorg/radare2
+    - https://www.radare.org/
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: mcp
+  tldr: >-
+    解决嵌入式与冷门架构上要纯命令行做完分析的问题：只用 shell 就能完成定位函数、跟踪引用、打补丁与格式解析，打包进固件镜像或容器里也不挑环境。
+    适合固件批量扫描、无 GUI 的服务器侧分析、以及要把反汇编步骤写进自动化脚本的流水线。
+    短板是命令体系陡峭且参数组合难记，反编译能力弱于 IDA/Ghidra，深度 C++ 分析常需回退到人工读汇编。
+  note: r2pipe 提供稳定的 Python/JS 绑定；radareorg 官方维护 radare2-mcp，可让 LLM 直接调用 r2 命令。

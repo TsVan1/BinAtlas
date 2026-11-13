@@ -1,0 +1,136 @@
+# BinAtlas 知识库 · 工具 · debuggers（调试器）
+# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 2
+# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+
+- id: tool:x64dbg
+  name: x64dbg
+  aliases: [x32dbg, x96dbg]
+  category: debuggers
+  domain:
+    - dom:malware-analysis
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:shellcode
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+  oss: true
+  learning_curve: 3
+  maintain_status: active
+  first_release: null
+  latest_version: "2026.05.27"
+  url: https://x64dbg.com/
+  source:
+    - https://github.com/x64dbg/x64dbg
+    - https://x64dbg.com/
+  verified_at: 2026-11-13
+  headless: partial
+  ai_ready: mcp
+  tldr: >-
+    解决 Windows 用户态样本要边跑边看的问题：内存布局、调用栈、寄存器与内存断点都能实时观察，脱壳与定位解密循环时可以直接在目标进程里设条件断点验证假设。
+    适合恶意样本行为验证、壳的自解密点定位、以及需要反复修改内存与打补丁的交互式分析。
+    短板是只覆盖 Ring3 且仅 Windows，驱动与内核问题要换 WinDbg；命令行与脚本能力有限，批量自动化仍要人工在环。
+  note: 社区 bromoket/x64dbg_mcp 提供 MCP 入口；官方以 GUI 为主，批处理需依赖脚本插件。
+
+- id: tool:windbg
+  name: WinDbg
+  aliases: [WinDbg Preview, cdb, kd]
+  category: debuggers
+  domain:
+    - dom:malware-analysis
+  artifacts:
+    - art:pe32
+    - art:pe64
+    - art:memory-dump
+  license: freeware
+  pricing: 免费
+  platforms:
+    - win
+  oss: false
+  learning_curve: 4
+  maintain_status: active
+  first_release: null
+  latest_version: "unknown"
+  url: https://learn.microsoft.com/windows-hardware/drivers/debugger/
+  source:
+    - https://learn.microsoft.com/windows-hardware/drivers/debugger/
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决 Windows 内核与崩溃现场无法用用户态调试器理解的问题：能直接分析崩溃转储、看驱动结构与对象、用扩展命令挖出 rootkit 的挂钩痕迹。
+    适合驱动与内核模块逆向、蓝屏转储归因、以及需要观察内核对象与池分配的恶意驱动分析。
+    短板是命令语法晦涩、扩展生态分散，符号依赖微软符号服务器；现代版本仍在滚动更新，版本号无法给出稳定标识。
+  note: 提供 cdb/kd 无界面版本与 DbgEng 接口，可脚本化；版本随商店滚动发布，故 latest_version 记 unknown。社区 mcp-windbg 提供 MCP 入口。
+
+- id: tool:gdb-pwndbg
+  name: GDB + pwndbg
+  aliases: [gdb, GNU Debugger, pwndbg]
+  category: debuggers
+  domain:
+    - dom:firmware
+    - dom:malware-analysis
+  artifacts:
+    - art:elf32
+    - art:elf64
+    - art:so
+    - art:firmware-image
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 4
+  maintain_status: active
+  first_release: 1986
+  latest_version: "18.1"
+  url: https://www.sourceware.org/gdb/
+  source:
+    - https://www.sourceware.org/gdb/
+    - https://github.com/pwndbg/pwndbg
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决 Linux/嵌入式目标要跨架构调试的问题：配合 gdbserver 与 qemu 可远程调试 MIPS/ARM 固件里的服务进程，栈、堆与结构体在 pwndbg 增强下能直接看清布局。
+    适合固件仿真环境里验证漏洞、Linux 恶意样本的运行时行为确认、以及 pwn 类堆利用的逐步调试。
+    短板是脚本调试依赖 Python API 且体验原始，符号缺失时还原结构完全靠手工；pwndbg 与 GDB 版本耦合，升级常破坏既有脚本。
+  note: 本条目按业界默认组合记一条：first_release 与 latest_version 取 GDB 主体（1986 / 18.1），pwndbg 为 GDB 上的 Python 增强层，发布节奏独立（2026.10.28），同类还有 gef、peda。
+
+- id: tool:lldb
+  name: LLDB
+  aliases: [LLDB, lldb-server]
+  category: debuggers
+  domain:
+    - dom:mobile
+    - dom:malware-analysis
+  artifacts:
+    - art:mach-o
+    - art:elf64
+  license: oss
+  pricing: 免费
+  platforms:
+    - win
+    - linux
+    - mac
+  oss: true
+  learning_curve: 4
+  maintain_status: active
+  first_release: null
+  latest_version: "23.1.5"
+  url: https://lldb.llvm.org/
+  source:
+    - https://lldb.llvm.org/
+    - https://github.com/llvm/llvm-project
+  verified_at: 2026-11-13
+  headless: yes
+  ai_ready: api
+  tldr: >-
+    解决 Apple 平台与 Swift/ObjC 目标要原生调试的问题：是 macOS 与 iOS 上唯一官方支持的调试器，能读 Mach-O 符号、处理 Objective-C 运行时与 arm64e 指针认证。
+    适合 iOS 应用动态分析、越狱设备上的进程挂接验证，以及需要与 Clang 生态一致的 Linux 侧调试。
+    短板是文档与社区经验远少于 GDB，命令行语法不兼容导致迁移成本高，iOS 真机调试还需搭配 debugserver 与签名环境。
+  note: 版本随 LLVM 发布周期（当前 LLVM 23.1.5）；无官方 MCP，LLDB Python API 是稳定脚本入口。
