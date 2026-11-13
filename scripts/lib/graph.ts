@@ -224,6 +224,10 @@ export interface GraphNode {
   pitfalls?: string[];
   /** 参考链接（§2.2） */
   references?: string[];
+  /** artifact 专属：载体类别（§2.5 的 kind 枚举）。不能叫 kind，会与节点类型冲突 */
+  artifact_kind?: string;
+  /** technique 专属：前置技术 ID（§2.2）。前置/下游面板与工作流排序都依赖它 */
+  prerequisites?: string[];
 }
 
 export interface GraphEdge {
@@ -335,6 +339,18 @@ function projectNode(node: CompiledNode): GraphNode {
   if (pitfalls.length > 0) out.pitfalls = pitfalls;
   const references = readStringArray(raw['references']);
   if (references.length > 0) out.references = references;
+
+  // §2.5 artifact 的载体类别：raw.kind 是「类别」，与 GraphNode.kind「节点类型」不是一回事
+  if (node.kind === 'artifact') {
+    const ak = readString(raw['kind']);
+    if (ak !== undefined) out.artifact_kind = ak;
+  }
+
+  // §2.2 technique 的前置技术
+  if (node.kind === 'technique') {
+    const pre = readStringArray(raw['prerequisites']);
+    if (pre.length > 0) out.prerequisites = pre;
+  }
 
   return out;
 }
