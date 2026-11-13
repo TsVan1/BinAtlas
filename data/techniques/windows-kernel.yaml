@@ -1,0 +1,1581 @@
+# BinAtlas 知识库 · 技术 · Windows 内核技术
+# 规范：03-DATA-SCHEMA.md §2.2（含 parent / commands / pitfalls 扩展字段）、§6.1 字数口径
+# 覆盖 6 个子领域 × 8 条 = 48 条：wk-driver / wk-debug / wk-objects / wk-callback / wk-exploit / wk-rootkit
+#
+# 三条写入纪律：
+# 1. 结构体偏移一律不给数字，统一用 dt nt!_X 让符号回答（跨版本硬编码偏移是本领域最大的错误来源）
+# 2. def / name 不出现具体工具名，工具归属交给 uses 边；commands 里才允许出现命令本身
+# 3. 涉及利用与隐藏的条目只写原理、缓解与检测面，不写可直接落地的完整链
+
+# ---------------------------------------------------------------------------
+# dom:wk-driver —— 驱动开发基础
+# ---------------------------------------------------------------------------
+
+- id: tech:driver-toolchain-setup
+  name: 驱动开发环境搭建
+  name_en: Driver Development Environment Setup
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 搭出可编译、可部署、可回滚的内核驱动开发环境：编译链与头库版本对齐、目标机快照、测试签名与加载开关。难点是签名与加载策略随系统版本和启动配置变化，环境没搭对时错误会伪装成代码缺陷。
+  difficulty: 4
+  prerequisites: []
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 可编译的驱动工程骨架
+  - 可回滚的目标机快照与加载配置
+  - 测试签名链路
+  - 环境参数核对清单
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'bcdedit /set testsigning on'
+    note: 打开测试签名以加载自签名驱动；需重启生效，开启后桌面会保留测试模式标记
+  - cmd: 'bcdedit /enum {current}'
+    note: 读取当前启动项的签名与调试开关，确认改动落在实际生效的那一项上
+  - cmd: 'signtool sign /fd sha256 /f <pfx 路径> /p <口令> {{driver}}'
+    note: 用自签名证书签驱动仅供本机开发；对外分发必须走官方硬件门户，不能靠自签
+  - cmd: 'sc create <服务名> type= kernel binPath= {{driver}}'
+    note: 注册为内核服务以便加载；type= 与 binPath= 后面的空格是语法要求，不是排版
+  pitfalls:
+  - 开了安全启动或内存完整性时测试签名策略可能不生效，先确认这两项状态再怀疑代码
+  - 编译器、头库与目标系统版本不对齐时能编译通过但加载失败，务必把版本组合写进项目文档
+  - 共用调试机上改启动配置会影响所有人，改动前先留下回滚命令
+
+- id: tech:driver-signing-policy
+  name: 驱动签名与加载策略
+  name_en: Driver Signing & Load Policy
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 判定一个驱动在当前系统上能否加载：签名链完整性、签署者身份、目录文件与启动配置里的强制项。难点是策略随系统版本和硬件安全功能变化，同一份驱动在两台机器上结论可以相反。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-toolchain-setup
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 驱动可加载性判定
+  - 签名链与签署者核对结果
+  - 影响加载的策略项清单
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'signtool verify /pa /v {{driver}}'
+    note: 按 Authenticode 策略校验签名链并打印证书主体；只覆盖文件签名，不等于内核加载判定
+  - cmd: 'Get-AuthenticodeSignature {{driver}}'
+    note: 快速查看签名状态与签署者，同样只覆盖文件本身
+  - cmd: 'bcdedit /enum {current}'
+    note: 核对签名强制与测试模式开关，判断本机是否允许未签名驱动
+  pitfalls:
+  - 只查文件签名不查加载策略，会在启用安全启动或内存完整性的机器上误判为可加载
+  - 目录文件与文件签名是两层校验，忽略目录会出现签名有效但加载失败
+  - 签名策略随系统更新变化，结论必须连系统版本与配置一起记录
+
+- id: tech:driver-entry-device-object
+  name: 驱动入口与设备对象
+  name_en: Driver Entry & Device Objects
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 实现驱动入口，创建设备对象与符号链接，把分发例程挂到驱动对象上，使用户态能打开设备。难点是设备对象、符号链接与分发表的生命周期必须与卸载路径严格对称，错一步就留下悬空引用。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-toolchain-setup
+  - tech:driver-signing-policy
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 可加载并创建设备的驱动
+  - 分发例程表
+  - 设备与符号链接命名方案
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: '!drvobj \Driver\{{module}} 2'
+    note: 在调试器命令窗口执行，查看驱动对象与分发例程表，确认挂载是否生效
+  - cmd: '!object \Device'
+    note: 列出设备命名空间，判断设备对象是否真的创建成功
+  - cmd: 'sc start <服务名>'
+    note: 以服务方式启动驱动；返回码能直接区分签名失败与入口例程返回失败
+  pitfalls:
+  - 先建设备再建符号链接的顺序不能反，链接失败时只删链接不删设备会残留对象
+  - 分发例程表里没覆盖的主功能码必须显式返回不支持并自行完成 IRP，交由系统处理会走未定义路径
+  - 设备名与符号链接名要考虑多实例，硬编码单名在第二次加载时直接冲突
+
+- id: tech:driver-irp-dispatch
+  name: IRP 分发与完成例程
+  name_en: IRP Dispatch & Completion
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 按主功能码分发 IRP，并决定同步完成、挂起到队列还是转发下层。难点是完成例程的返回值语义与中断级别约束：声明继续处理时不得提前完成，挂起后还必须实现取消路径。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 分发例程实现
+  - 挂起队列与取消路径
+  - IRP 生命周期核对结论
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: '!irpfind'
+    note: 在调试器里枚举当前所有 IRP，用于定位泄漏或被挂死后不再完成的请求
+  - cmd: 'dt nt!_IO_STACK_LOCATION'
+    note: 查看 I/O 栈位置类型定义，确认该读哪个联合成员；不要凭外部资料猜偏移
+  - cmd: '!irp <IRP 地址>'
+    note: 展开单个 IRP 的栈位置与状态，地址取自上一步枚举输出
+  pitfalls:
+  - 完成例程返回继续处理却又调用了完成例程，属重复完成，现象通常是访问已释放内存
+  - 挂起 IRP 后不实现取消例程，用户态进程一退出请求就永久悬挂并拖住线程
+  - 在过高的中断级别上访问可分页内存会随机蓝屏，且只在压力下复现
+
+- id: tech:driver-ioctl-interface
+  name: IOCTL 接口与输入校验
+  name_en: IOCTL Interface & Input Validation
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 定义设备控制码与用户态通信协议，按缓冲方式把请求数据搬进内核并逐项校验。难点是不信任任何输入：长度、输出缓冲、调用者权限与并发重入都得自己挡，漏一处就是内核内存破坏。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-irp-dispatch
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 控制码定义表
+  - 输入与输出校验清单
+  - 用户态调用样例
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'x {{module}}!*Dispatch*'
+    note: 在调试器里列出可疑的分发例程符号，确认控制码真正落在哪个函数
+  - cmd: 'dt nt!_IO_STACK_LOCATION'
+    note: 确认设备控制相关参数成员的布局，再决定取哪几个字段
+  - cmd: 'dumpbin /headers {{driver}}'
+    note: 静态确认映像是内核驱动而不是用户态 DLL，避免审错对象
+  pitfalls:
+  - 直接信任用户态传入的长度或指针等于把任意写交给调用者，必须自行校验范围并放在异常保护里访问
+  - 缓冲方式与长度字段语义不匹配时输出会越界，且只在特定对齐或长度下触发
+  - 缺调用者权限判定时普通用户即可触达本应管理员专用的控制码
+
+- id: tech:driver-kmdf-framework
+  name: 框架驱动对象模型
+  name_en: KMDF Object Model
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 用框架提供的对象、队列与上下文模型实现驱动，把 I/O 请求与电源事件交给框架调度。难点是框架状态机的契约：回调里能做什么、引用怎么取、何时可以阻塞，理解错通常表现为挂起而非蓝屏。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 框架驱动骨架
+  - 队列与上下文设计
+  - 电源与即插即用回调清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!wdfkd.wdfdriverinfo {{module}}'
+    note: 用调试器框架扩展查看驱动与框架对象状态；扩展不可用就退回 !drvobj 与 !object
+  - cmd: 'sc query <服务名>'
+    note: 确认服务状态与退出码，框架初始化失败常在这里给出可读错误码
+  pitfalls:
+  - 在框架回调里阻塞等待一个没有别处会满足的条件，表现是超时或整机挂起
+  - 上下文清理回调里再访问设备对象，卸载路径上极易踩到已释放内存
+  - 队列的请求处置策略选错会让并发行为与设计不符，通常压测才暴露
+
+- id: tech:driver-verifier-testing
+  name: 驱动验证与压力测试
+  name_en: Driver Verifier Stress Testing
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 打开内核验证选项并施加压力，把潜伏的池越界、中断级别违规与资源泄漏提前暴露。难点是开启验证后分配布局与时序都变了，复现条件随之改变，必须先定位到具体被触发的检查项。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-toolchain-setup
+  - tech:driver-irp-dispatch
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 验证选项配置与复现步骤
+  - 被触发的检查项清单
+  - 崩溃转储与归因结论
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: 'verifier /standard /driver {{driver}}'
+    note: 给指定驱动挂上标准验证项，重启后生效；只挂自家驱动，别全量挂
+  - cmd: 'verifier /querysettings'
+    note: 确认当前真正生效的验证选项，避免以为开了其实没开
+  - cmd: '!verifier'
+    note: 在调试器里查看验证器统计与最近一次违规信息
+  - cmd: 'verifier /reset'
+    note: 关闭全部验证并清除设置，系统起不来时的兜底动作
+  pitfalls:
+  - 全量挂验证会让系统极慢甚至无法启动，务必限定到单个驱动并预留快照
+  - 验证器报的第一现场未必是根因，池越界常常在释放时才被检出
+  - 开特殊池后内存布局改变，原本稳定复现的路径会消失，需要降压力重试
+
+- id: tech:driver-unload-cleanup
+  name: 卸载路径与资源回收
+  name_en: Unload Path & Resource Reclaim
+  domain:
+  - dom:wk-driver
+  parent: dom:wk-driver
+  def: 在卸载例程里逆序释放设备、符号链接、队列、定时器与回调注册，确保没有残留引用。难点是卸载后仍有回调或工作项在跑，问题往往到重启或再次加载时才以访问已释放内存的形式出现。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-irp-dispatch
+  - tech:driver-verifier-testing
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 卸载顺序清单
+  - 残留引用与泄漏核对结果
+  - 反复加载卸载的稳定性结论
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'sc stop <服务名>'
+    note: 触发卸载；返回码能区分还有引用无法卸载与卸载例程返回失败
+  - cmd: '!poolused 2'
+    note: 按标签统计池占用，反复加载卸载后对比就能看出泄漏
+  - cmd: 'lm'
+    note: 确认模块是否真的从模块列表消失，残留说明卸载没走完
+  pitfalls:
+  - 卸载前不注销已注册的回调，回调指针会指向已卸载代码，之后任何触发都直接蓝屏
+  - 定时器与工作项只标记删除不等待完成，是典型的卸载后执行
+  - 反复加载卸载几十次再判定稳定，单次卸载成功说明不了问题
+
+# ---------------------------------------------------------------------------
+# dom:wk-debug —— 内核调试
+# ---------------------------------------------------------------------------
+
+- id: tech:kernel-debug-transport-setup
+  name: 内核调试通道搭建
+  name_en: Kernel Debug Transport Setup
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 建立宿主机与目标机的内核调试通道，选择串口、网络或虚拟机专用管道，让目标机在启动早期就进入可调试状态。难点是通道建立早于系统启动，配错时目标机侧只会静默停住或直接蓝屏。
+  difficulty: 4
+  prerequisites: []
+  artifacts:
+  - art:driver
+  - art:memory-dump
+  outputs:
+  - 可用的调试通道
+  - 目标机启动配置
+  - 连通性核对步骤
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'bcdedit /debug on'
+    note: 为目标机当前启动项打开内核调试，重启后生效
+  - cmd: 'bcdedit /dbgsettings'
+    note: 查看当前传输方式、端口与密钥，确认目标机侧参数与宿主机一致
+  - cmd: '.sympath srv*{{sympath}}*https://msdl.microsoft.com/download/symbols'
+    note: 在调试器里设置符号路径与本地缓存目录，路径顺序决定查找优先级
+  - cmd: '.reload /f'
+    note: 强制重载符号；改完符号路径必须执行一次，否则仍用旧缓存
+  pitfalls:
+  - 目标机没重启就以为通道已生效，内核调试开关只在启动时读取
+  - 网络调试两侧密钥或端口不一致时表现是长时间等待而不是报错
+  - 虚拟机快照要在配好调试通道之后再打，否则每次恢复都得重配
+  - 宿主机防火墙拦掉调试端口，现象是目标机已停住但主机没有任何输出
+
+- id: tech:kernel-symbol-management
+  name: 内核符号与类型信息
+  name_en: Kernel Symbol & Type Info
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 让调试器能解析内核与驱动的函数名、全局变量和结构类型，来源是公开符号服务器、本地缓存与私有符号。难点是公开符号不含未导出语义：类型里看得到字段，仍需判断它到底在表达什么。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-debug-transport-setup
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:pe64
+  outputs:
+  - 符号路径与缓存配置
+  - 目标模块符号加载状态
+  - 关键结构类型清单
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: '.sympath srv*{{sympath}}*https://msdl.microsoft.com/download/symbols'
+    note: 公开符号从官方符号服务器按需下载并缓存到本地目录
+  - cmd: '.reload /f {{module}}'
+    note: 只重载目标模块符号，比全量重载快得多
+  - cmd: '!lmi {{module}}'
+    note: 查看模块的符号类型与加载状态，判断是私有符号还是仅导出符号
+  - cmd: 'dt nt!_EPROCESS'
+    note: 打印结构类型定义；字段随版本增删重排，一律以当前符号输出为准
+  pitfalls:
+  - 把旧版本的偏移硬编码进脚本，换构建就错位，必须每次从符号取
+  - 符号缓存目录被清理或不可写会退化成无符号调试，栈与类型全变成裸地址
+  - 私有符号版本与目标机二进制不匹配时，解析出的字段名是看着对的错
+
+- id: tech:bugcheck-dump-triage
+  name: 蓝屏转储归因
+  name_en: Bugcheck Dump Triage
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 从崩溃转储还原蓝屏现场：错误码与四个参数、出错线程栈、被引用的对象与池块。难点是崩溃点常是受害者而不是元凶，栈也常被破坏，必须靠参数含义与内存交叉验证才能指认真正原因。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-debug-transport-setup
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 错误码与参数解读
+  - 归因结论与证据链
+  - 待验证的复现条件
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '.bugcheck'
+    note: 打印转储里的错误码与四个参数；先弄清参数含义，再看栈
+  - cmd: '!analyze -v'
+    note: 自动归因输出，把它给的模块名当线索而不是结论
+  - cmd: 'kb'
+    note: 带参数的栈回溯，参数值常是判断访问了哪个地址的关键
+  - cmd: '!pool <地址>'
+    note: 对栈里出现的可疑地址查池块归属，区分已释放与越界
+  pitfalls:
+  - 直接采信自动分析给出的模块名，会把受害者驱动当成根因
+  - 只看崩溃线程的栈，忽略同一池块被其他线程释放的时间线
+  - 小内存转储不含全部内存，池与对象内容缺失时要换完整转储重来
+
+- id: tech:kernel-breakpoint-strategy
+  name: 内核断点策略
+  name_en: Kernel Breakpoint Strategy
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 在内核代码上选合适的断点类型与位置，并加命中条件以避免中断风暴。难点是软件断点会改写代码页并改变时序，既可能被完整性校验判定为篡改，也会让超时类问题直接不再复现。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-debug-transport-setup
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 断点布置方案
+  - 命中条件与过滤规则
+  - 断点对时序影响的评估
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'bp {{module}}!<函数名>'
+    note: 在指定函数入口下断；函数名先用符号确认，不要用猜出来的名字
+  - cmd: 'ba w8 <地址>'
+    note: 硬件写断点监视指定地址，不改写代码页；数量有限且受字节宽度限制
+  - cmd: 'bl'
+    note: 查看断点列表与命中计数，确认条件是否真的生效
+  - cmd: 'g'
+    note: 继续运行；内核断点命中会让整机停住，无人值守时慎用
+  pitfalls:
+  - 在高频路径上无条件断点会把系统拖成假死，务必先加条件或命中计数
+  - 软件断点改写的代码页可能被完整性检查判为篡改，表现为另一种蓝屏
+  - 断点让竞态窗口消失，问题不复现不代表不存在，应改用日志或计数器
+
+- id: tech:live-kernel-state-inspection
+  name: 运行时状态查看
+  name_en: Live Kernel State Inspection
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 在目标机暂停时枚举进程线程、句柄、对象与池的当前状态，用类型化视图代替裸内存读取。难点是所谓当前状态只是一个时间切片，必须结合等待链与引用关系才能判断系统卡在哪一环。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 进程与线程快照
+  - 句柄与对象引用关系
+  - 资源占用与等待点清单
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: '!process 0 0'
+    note: 列出全部进程及结构地址与线程摘要，作为后续命令的地址来源
+  - cmd: '!vm'
+    note: 查看内核虚拟内存与池的总体占用，先分清是耗尽还是单点异常
+  - cmd: '!handle 0 f Process'
+    note: 列出进程类句柄及其引用计数，句柄泄漏常在这里显形
+  - cmd: 'dt nt!_EPROCESS'
+    note: 查看结构定义，确认要读的字段在当前版本的确切名字
+  pitfalls:
+  - 把一次快照当成稳定状态，会漏掉正在迁移或正在退出的对象
+  - 只看句柄数量不看引用计数，分不清句柄泄漏与内核对象未释放
+  - 多处理器上各处理器的暂停时机不同，线程栈可能停在与问题无关的位置
+
+- id: tech:kernel-pool-forensics
+  name: 池内存取证
+  name_en: Kernel Pool Forensics
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 通过池标签、区块头与分配大小还原内核动态内存的归属与生命周期，定位越界、重复释放与泄漏。难点是布局受验证选项与系统配置影响，已释放区块被复用后只能靠元数据与时间线反推。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  - tech:live-kernel-state-inspection
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 池块归属与大小结论
+  - 泄漏或破坏的时间线
+  - 可疑分配点清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!poolused 2'
+    note: 按标签汇总池占用并排序，先找异常放大的标签
+  - cmd: '!poolfind <标签>'
+    note: 枚举指定标签的全部池块；标签须为四字符且大小写敏感
+  - cmd: '!pool <地址>'
+    note: 查看单个地址所属池块与相邻区块，判断越界还是已释放
+  pitfalls:
+  - 池标签可被分配方任意指定，第三方复用通用标签会让归属判断直接失效
+  - 开着特殊池或验证选项时布局与生产环境不同，结论不能直接外推
+  - 已释放区块头部被覆盖后仍强行解读，会得出完全错误的归属
+
+- id: tech:kernel-stack-unwind-analysis
+  name: 调用栈回溯分析
+  name_en: Kernel Stack Unwind Analysis
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 在缺少帧指针且被内联优化的内核代码上还原真实调用链，并区分线程上下文与中断上下文。难点是优化后栈帧不连续、参数也未必留在栈上，回溯结论必须由多处证据互相印证。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  - tech:live-kernel-state-inspection
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 可信调用链
+  - 上下文类型判定
+  - 可疑栈帧与印证证据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'kb'
+    note: 带前三个参数的栈回溯，先看参数是否合理再判断调用关系
+  - cmd: 'dps @rsp L40'
+    note: 按指针宽度扫描栈区，用于回溯断裂处人工寻找返回地址；x64 栈指针为 rsp
+  - cmd: '.frame 1'
+    note: 切换到指定栈帧上下文，再观察该帧的局部状态
+  pitfalls:
+  - 把扫描到的任意指针当返回地址，会凭空造出一段不存在的调用链
+  - 中断或延迟过程调用的栈与线程栈交织，不先判定上下文就会读错帧
+  - 内联展开让同一逻辑函数出现在多处，按函数名归因会重复计数
+
+- id: tech:kernel-hang-diagnosis
+  name: 挂起与超时诊断
+  name_en: Hang & Timeout Diagnosis
+  domain:
+  - dom:wk-debug
+  parent: dom:wk-debug
+  def: 系统不蓝屏但整体卡死或周期性停顿，需从等待链、锁持有者与中断占用找出卡点。难点是没有崩溃现场，只能靠谁在等谁的关系图与暂停时机推断，而暂停本身又会改变卡点表现。
+  difficulty: 5
+  prerequisites:
+  - tech:bugcheck-dump-triage
+  - tech:kernel-stack-unwind-analysis
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  - art:driver
+  outputs:
+  - 等待关系图
+  - 卡点定位结论
+  - 复现与验证方案
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!analyze -hang'
+    note: 自动检测挂起类问题，输出被阻塞的线程与疑似持有者
+  - cmd: '!stacks 2'
+    note: 按调用栈聚合全部线程，一眼看出大量线程堆在同一处
+  - cmd: '!locks'
+    note: 列出内核锁及其持有者，确认是否存在锁竞争或死锁
+  pitfalls:
+  - 只在卡死瞬间取一次快照，无法区分持锁线程被抢占与真正死锁
+  - 把周期性停顿当成完全卡死，会漏掉高频中断或延迟过程调用这条线
+  - 调试器暂停所有处理器本身会改变调度，卡点可能在恢复后自行消失
+
+# ---------------------------------------------------------------------------
+# dom:wk-objects —— 内核对象与结构
+# ---------------------------------------------------------------------------
+
+- id: tech:object-manager-namespace
+  name: 对象命名空间分析
+  name_en: Object Namespace Analysis
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 沿对象管理器的目录树定位设备、驱动、回调等命名对象，理解符号链接如何把路径映射到真实对象。难点是同一对象可能有多个名字入口，判断谁在用它必须回到对象头的引用与句柄。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 命名路径与对象对应表
+  - 符号链接映射关系
+  - 对象引用来源清单
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \'
+    note: 从命名空间根开始逐层展开；路径分隔符与大小写要与输出保持一致
+  - cmd: '!object \ObjectTypes'
+    note: 列出对象类型与数量，用于判断某类对象是否异常增多
+  - cmd: '!drvobj \Driver\{{module}} 2'
+    note: 由名字定位驱动对象并展开分发例程表
+  pitfalls:
+  - 把符号链接名当成真实对象名，会在错误层级找不到对象
+  - 未命名对象不出现在命名空间里，只按名字枚举会漏掉大量真实对象
+  - 同名设备在不同会话或不同实例下可以有多个，看到第一个就下结论容易错
+
+- id: tech:eprocess-field-recovery
+  name: 进程结构字段还原
+  name_en: EPROCESS Field Recovery
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 在进程结构中定位名称、父进程、令牌、线程链与保护状态等字段，并给每个字段找到可验证的证据。难点是字段随版本增删重排，硬编码偏移只在单一构建上成立，跨版本必须重新确认。
+  difficulty: 4
+  prerequisites:
+  - tech:object-manager-namespace
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 字段与偏移映射表
+  - 每个字段的验证方式
+  - 跨版本差异记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dt nt!_EPROCESS'
+    note: 把符号给出的类型定义作为唯一偏移来源，不要用外部资料里的旧偏移
+  - cmd: '!process 0 0'
+    note: 取得进程结构地址，再配合类型化视图观察具体实例
+  - cmd: 'dt nt!_EPROCESS <地址>'
+    note: 打印实例字段值，用名称或父进程这类可比对项验证解读是否正确
+  pitfalls:
+  - 抄一份网上的偏移表直接用，构建号一变就全错，而且错得很安静
+  - 字段存在不代表语义如你所想，必须用行为或已知值做交叉验证
+  - 结构内的联合成员在不同配置下复用同一空间，读到的值可能是另一种解释
+
+- id: tech:handle-table-walk
+  name: 句柄表遍历
+  name_en: Handle Table Walk
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 从进程的句柄表还原句柄值到对象的映射，判断某进程实际持有哪些内核资源。难点是句柄表分层且句柄值经过编码，句柄存在也不等于对象可被不受限地使用。
+  difficulty: 4
+  prerequisites:
+  - tech:eprocess-field-recovery
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 句柄与对象类型对照表
+  - 授予权限位解读
+  - 可疑句柄清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!handle 0 f Process'
+    note: 列出所有进程类句柄及引用计数，先看总量再看单点
+  - cmd: '!object \ObjectTypes'
+    note: 确认对象类型名，避免把类型索引当成类型名
+  - cmd: 'dt nt!_HANDLE_TABLE'
+    note: 查看句柄表结构定义，分层与编码方式以符号输出为准
+  pitfalls:
+  - 只统计句柄数量不看授予的访问权限，会把受限句柄误判为完全控制
+  - 句柄值不是数组下标，按偏移直接寻址会读到无关对象
+  - 进程退出过程中句柄表正在拆解，此时遍历会得到自相矛盾的结果
+
+- id: tech:object-reference-tracking
+  name: 对象引用计数追踪
+  name_en: Object Reference Tracking
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 追踪内核对象引用计数的增减来源，判断是引用泄漏还是正常缓存。难点是增减点分散在系统与第三方驱动里，泄漏要到对象耗尽才暴露，事后回溯需要完整时间线而非单点快照。
+  difficulty: 5
+  prerequisites:
+  - tech:object-manager-namespace
+  - tech:handle-table-walk
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 引用增减点清单
+  - 泄漏归因结论
+  - 观测与复现方案
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!object <对象地址>'
+    note: 查看对象的类型、名称与引用相关信息，地址来自命名空间或池枚举
+  - cmd: '!poolfind <标签>'
+    note: 找出同标签对象块，批量对比能看出数量是否随操作单调增长
+  - cmd: '!poolused 2'
+    note: 观察对象相关池占用的增长趋势，判断是泄漏还是缓存
+  pitfalls:
+  - 引用归零后的对象仍可能可读一段时间，读到看起来正常的内容会误导判断
+  - 把临时持有当泄漏，必须看多次操作后的净增长而不是单次快照
+  - 引用追踪需要提前开启，问题发生后再想补开拿不到历史增减点
+
+- id: tech:undocumented-layout-recovery
+  name: 未公开结构布局还原
+  name_en: Undocumented Layout Recovery
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 在只有部分类型信息时还原结构布局：靠字段访问模式、常量比对与对齐规则推断成员位置与大小。难点是每种假设都必须能被证伪，单看一处访问模式很容易把填充或复用空间当成真成员。
+  difficulty: 5
+  prerequisites:
+  - tech:eprocess-field-recovery
+  artifacts:
+  - art:memory-dump
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 结构布局草案
+  - 每个成员的证据
+  - 待验证假设清单
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: 'dt nt!_EPROCESS'
+    note: 先用已知结构建立基线，再对照未知结构的访问模式
+  - cmd: 'x nt!*Eprocess*'
+    note: 列出相关符号；未导出例程的符号有时能反推成员用途
+  - cmd: 'dps <地址> L40'
+    note: 观察指针密集区域，判断哪些位置确实存放地址
+  pitfalls:
+  - 把对齐填充当成字段，会让后续所有偏移推断整体串位
+  - 结构常被内联或复制进别的结构，只在一种上下文验证会得出片面结论
+  - 单版本推断出的布局不能跨构建复用，必须标注适用版本
+
+- id: tech:pool-tag-attribution
+  name: 池标签归属分析
+  name_en: Pool Tag Attribution
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 用池标签把内核分配归到具体组件，判断内存增长来自哪一方。难点是标签由分配方自定义且常被复用，归属只能当线索，最终仍要靠调用栈或模块范围确认。
+  difficulty: 3
+  prerequisites:
+  - tech:kernel-pool-forensics
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 标签到组件的候选映射
+  - 增长异常的标签清单
+  - 归属确认证据
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: '!poolused 2'
+    note: 按标签排序查看池占用，先锁定异常放大的标签
+  - cmd: '!poolfind <标签>'
+    note: 枚举该标签下全部池块；四字符且区分大小写
+  - cmd: 'lm'
+    note: 结合已加载模块范围判断标签可能属于谁
+  pitfalls:
+  - 同一标签常被多个组件使用，按标签直接指认元凶会误伤
+  - 标签统计包含已释放未归还的区块，增长不等于泄漏
+  - 开验证选项后区块布局改变，文件里记录的大小需要重算
+
+- id: tech:token-privilege-inspection
+  name: 令牌与特权检查
+  name_en: Token Privilege Inspection
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 读取进程或线程令牌里的身份、组成员、特权位与完整性级别，判断实际权限而不是账户名。难点是进程与线程各持一份令牌，特权还有已授予与已启用之分，看错一项结论就反了。
+  difficulty: 4
+  prerequisites:
+  - tech:eprocess-field-recovery
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 令牌内容解读
+  - 特权启用状态结论
+  - 实际权限边界判定
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: '!token'
+    note: 不带参数时显示当前进程令牌；重点看特权是已授予还是已启用
+  - cmd: 'dt nt!_TOKEN'
+    note: 查看令牌结构定义，确认特权与完整性级别字段的当前命名
+  - cmd: 'whoami /priv'
+    note: 在目标系统上取用户态视角的特权列表，与内核侧解读互相印证
+  pitfalls:
+  - 只看组成员不看完整性级别，会把受限的管理员当成完全权限
+  - 特权已授予不等于已启用，提权判断必须看启用位
+  - 线程可以临时替换令牌，只读进程令牌会漏掉正在生效的那一份
+
+- id: tech:kernel-address-space-mapping
+  name: 内核地址空间布局
+  name_en: Kernel Address Space Layout
+  domain:
+  - dom:wk-objects
+  parent: dom:wk-objects
+  def: 确定内核各区域的实际范围与映射关系：映像区、池区、页表与超空间，判断某个地址属于哪一类。难点是基址每次启动随机化、区域边界随架构与启动配置变化，只能实测不能背固定值。
+  difficulty: 4
+  prerequisites:
+  - tech:undocumented-layout-recovery
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 地址区间划分结论
+  - 关键基址与模块范围
+  - 地址归属判定方法
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'lm'
+    note: 列出已加载模块的起止范围，先建立映像区的事实基线
+  - cmd: '!vm'
+    note: 查看内核虚拟内存各分区统计，区域划分以该输出为准
+  - cmd: '!pte <地址>'
+    note: 查地址对应的页表项，判断是否有效映射及其权限
+  pitfalls:
+  - 背下某个版本的内核基址当常量，重启一次就失效
+  - 用用户态地址范围的经验去判断内核地址，会把超空间区域误判成异常
+  - 地址有效不代表对象存活，映射存在与内容未释放是两件事
+
+# ---------------------------------------------------------------------------
+# dom:wk-callback —— 回调与过滤驱动
+# ---------------------------------------------------------------------------
+
+- id: tech:process-thread-callback
+  name: 进程线程通知回调
+  name_en: Process & Thread Notification
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 注册进程与线程创建退出的通知回调，在对象生命周期早期介入观测或拦截。难点是回调在父进程或初始化上下文里执行，此时目标对象尚未初始化完，阻塞等待极易造成自死锁。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 回调注册与注销代码
+  - 回调触发条件说明
+  - 目标对象的早期状态观测结果
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \Callback'
+    note: 查看回调对象命名空间；能否完整列出随系统版本而异，缺失不代表没注册
+  - cmd: 'dt nt!_EX_CALLBACK*'
+    note: 通配匹配回调相关类型，先确认当前符号里存在哪些类型再解读
+  - cmd: 'lm'
+    note: 核对回调注册方模块是否仍加载，残留回调常指向已卸载模块
+  pitfalls:
+  - 在回调里同步等待新建进程的状态，会把父进程的创建路径拖成自死锁
+  - 只注销部分回调，卸载后残留指针在下次事件触发时直接蓝屏
+  - 创建回调拿到的是早期对象，用常规状态查询会读到尚未填充的字段
+
+- id: tech:image-load-callback
+  name: 映像加载回调
+  name_en: Image Load Notification
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在可执行映像映射完成、入口执行之前收到通知，用基址与映像信息判断是否值得关注。难点是回调只给很少信息，需自行解析映像结构，而在这个阶段做重活会拖慢每一次进程启动。
+  difficulty: 4
+  prerequisites:
+  - tech:process-thread-callback
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 映像加载事件流
+  - 关键字段提取结果
+  - 回调开销评估
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \Callback'
+    note: 确认映像加载回调是否已注册
+  - cmd: 'lmvm {{module}}'
+    note: 查看模块加载基址与时间戳，用于验证回调里取到的信息
+  - cmd: '!lmi {{module}}'
+    note: 检查模块符号与映像信息，辅助判断模块是否被替换
+  pitfalls:
+  - 在回调里做完整映像解析与路径匹配，进程启动密集时会叠加成整体卡顿
+  - 映像可能已被换出或卸载后才去处理，先前保存的基址随之失效
+  - 只按路径黑名单判断，改名或内存加载的映像直接绕过
+
+- id: tech:registry-callback-filtering
+  name: 注册表回调过滤
+  name_en: Registry Callback Filtering
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在注册表操作前后收到通知，按键路径与操作类型决定放行、审计还是拒绝。难点是路径可能尚未规范化（重定向、符号链接、相对路径），而拒绝系统级写入会造成难以预期的连锁故障。
+  difficulty: 5
+  prerequisites:
+  - tech:process-thread-callback
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 监控规则与命中记录
+  - 路径规范化处理方案
+  - 拦截副作用评估
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: '!object \Callback'
+    note: 查看注册表回调的注册情况
+  - cmd: 'reg query <键路径>'
+    note: 在目标系统上核对键的真实值，与回调观测到的操作对照
+  - cmd: 'dt nt!_EX_CALLBACK*'
+    note: 确认回调相关类型在当前符号里的定义，避免用错结构解读
+  pitfalls:
+  - 只用原始路径匹配，重定向与符号链接会让同一次写入出现两个路径
+  - 拦截时直接返回错误码，会让依赖该写入的系统组件停在半初始化状态
+  - 启动早期触发的写入发生时，依赖的用户态服务还没就绪
+
+- id: tech:handle-operation-callback
+  name: 句柄操作回调
+  name_en: Handle Operation Callback
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在句柄打开与复制路径上收到通知，可观测甚至缩减将授予的访问权限。难点是回调运行在任意进程线程上下文，必须避锁并控制开销，而权限位的改动会反过来影响调用方的后续行为。
+  difficulty: 5
+  prerequisites:
+  - tech:process-thread-callback
+  - tech:token-privilege-inspection
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 句柄操作事件流
+  - 权限缩减效果验证
+  - 开销与稳定性评估
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: '!handle 0 f Process'
+    note: 对照观察句柄与授予权限，验证回调是否真的改变了结果
+  - cmd: '!object \Callback'
+    note: 确认回调注册状态
+  - cmd: 'dt nt!_OBJECT_TYPE'
+    note: 查看对象类型结构；对象操作类回调按类型挂在各自的回调链上，字段名以符号输出为准
+  pitfalls:
+  - 在回调里获取会阻塞的锁，句柄操作极频繁，立刻表现为整机变慢
+  - 盲目清除权限位会让合法调用方拿到意外失败，用户侧表现为莫名拒绝访问
+  - 回调里保存对象指针却不加引用，对象释放后再使用即蓝屏
+
+- id: tech:wfp-callout-filtering
+  name: 网络过滤回调驱动
+  name_en: Network Filtering Callouts
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 在网络栈的分层上注册分类回调，对连接与数据包做检查或阻断。难点是分类函数运行在较高中断级别，既不能阻塞也不能做重活，它与用户态策略之间的同步还必须无锁可靠。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 过滤层与回调设计
+  - 策略同步方案
+  - 分类回调开销评估
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'netsh wfp show state'
+    note: 导出当前过滤状态；输出到文件，参数与格式随系统版本略有差异
+  - cmd: 'netsh wfp show filters'
+    note: 列出已注册过滤器，核对分层与权重是否符合设计
+  - cmd: '!object \Device'
+    note: 确认过滤组件相关设备对象是否创建成功
+  pitfalls:
+  - 在分类回调里等待用户态决策，会把整条连接路径卡死
+  - 过滤层选错只看到部分流量，结论会变成没有该流量而不是没看到
+  - 卸载时未注销回调，网络栈继续调用已卸载代码
+
+- id: tech:minifilter-development
+  name: 微过滤驱动开发
+  name_en: Minifilter Development
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 以过滤管理器管辖的过滤单元介入文件操作，注册前置与后置回调并管理流、实例、文件三级上下文。难点是上下文生命周期与取消、卸载路径交织，任何一处引用没配平都会在压力下崩。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-entry-device-object
+  - tech:driver-irp-dispatch
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 过滤驱动骨架
+  - 上下文生命周期设计
+  - 回调注册与注销清单
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'fltmc filters'
+    note: 列出已加载过滤器与高度值，确认目标过滤器在链上的位置
+  - cmd: 'fltmc instances'
+    note: 查看过滤器在各卷上的实例，实例缺失说明挂载没成功
+  - cmd: '!fltkd.filters'
+    note: 调试器扩展查看过滤管理器侧状态；扩展命令随调试工具版本变化，不可用就退回 fltmc
+  pitfalls:
+  - 上下文引用没配平，卷下马或卸载时触发已释放内存访问
+  - 前置回调里对同一文件再发起 I/O 却不做重入判断，会自己等自己
+  - 只测单卷单文件，多卷与网络路径下的实例创建失败不会被发现
+
+- id: tech:filter-altitude-ordering
+  name: 过滤高度与顺序
+  name_en: Filter Altitude Ordering
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 为过滤器选定高度值以决定它在链上的相对位置，并评估与加密、备份、防病毒类过滤器的相互影响。难点是高度在安装时确定且运行期不可调整，选错只能在部署之后才暴露冲突。
+  difficulty: 4
+  prerequisites:
+  - tech:minifilter-development
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 高度选型依据
+  - 链上顺序实测结果
+  - 与既有过滤器的兼容结论
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'fltmc filters'
+    note: 查看所有过滤器及高度，直接读出链上顺序
+  - cmd: 'fltmc instances'
+    note: 查看实例状态，确认顺序结论不是建立在未挂载的过滤器上
+  - cmd: '!fltkd.filters'
+    note: 调试器侧交叉核对过滤器链；扩展不可用则只用 fltmc 的结论
+  pitfalls:
+  - 高度值绑定在服务注册信息里，改高度必须卸载重装
+  - 只在自己机器上看顺序，客户机器多一个过滤器就改变了实际行为
+  - 高度相同或相近的过滤器之间，行为差异会被放大成兼容性问题
+
+- id: tech:callback-integrity-audit
+  name: 回调完整性审计
+  name_en: Callback Integrity Audit
+  domain:
+  - dom:wk-callback
+  parent: dom:wk-callback
+  def: 对比回调注册集合与历史基线，发现被摘除或被替换的回调项，判断是合法卸载还是可疑篡改。难点是没有稳定的完整枚举接口，取到的集合本身可能已被篡改，必须多来源交叉印证。
+  difficulty: 5
+  prerequisites:
+  - tech:registry-callback-filtering
+  - tech:handle-operation-callback
+  artifacts:
+  - art:kernel-module
+  - art:driver
+  - art:memory-dump
+  outputs:
+  - 回调快照与差异清单
+  - 可疑摘除项结论
+  - 多来源交叉印证证据
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!object \Callback'
+    note: 取回调对象快照，与基线做差集
+  - cmd: 'lm'
+    note: 核对快照里回调所属模块是否仍加载；未加载却仍有回调即为可疑
+  - cmd: 'dt nt!_EX_CALLBACK*'
+    note: 通配确认类型集合，避免用错类型名解读
+  pitfalls:
+  - 把列表里没有当成结论，很多回调不在命名空间可见，会大量漏报
+  - 基线快照取自已可能被感染的机器，差集自然为空
+  - 合法安全产品的卸载与恶意摘除结果一致，必须结合模块加载与签名判断
+
+# ---------------------------------------------------------------------------
+# dom:wk-exploit —— 内核漏洞利用（只写原语、缓解与检测面，不写完整链）
+# ---------------------------------------------------------------------------
+
+- id: tech:kernel-attack-surface-audit
+  name: 内核攻击面梳理
+  name_en: Kernel Attack Surface Audit
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 枚举可从用户态触达的内核入口：设备控制、文件系统请求、网络过滤与各类通知机制，并标注每个入口的权限前提。难点是入口分散在驱动与系统组件里，很多路径无文档，只能从分发例程反推。
+  difficulty: 4
+  prerequisites:
+  - tech:driver-entry-device-object
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:kernel-module
+  outputs:
+  - 可达入口清单
+  - 每个入口的权限前提
+  - 优先排查顺序
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dumpbin /imports {{driver}}'
+    note: 静态看驱动依赖的系统例程，能反推它用了哪类机制
+  - cmd: '!object \Device'
+    note: 枚举设备命名空间，找出对外暴露的可疑设备
+  - cmd: '!drvobj \Driver\{{module}} 2'
+    note: 查看分发例程表，确认哪些主功能码真的被处理
+  pitfalls:
+  - 只看设备控制入口，漏掉文件系统与网络路径上的间接入口
+  - 有设备对象不等于普通用户可达，权限判定要回到设备访问控制与调用者身份
+  - 反推入口时把未实现的主功能码也算进去，会虚增攻击面
+
+- id: tech:ioctl-access-control-review
+  name: 控制码权限审查
+  name_en: IOCTL Access Control Review
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 审查每个设备控制码要求调用者具备的访问权限，再与设备对象的访问控制列表交叉比对。难点是两者组合一旦错配，就等价于把内核接口开放给低权限用户，而这种错配在代码层面完全合法。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-attack-surface-audit
+  - tech:driver-ioctl-interface
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 控制码与权限要求对照表
+  - 错配项清单
+  - 可达性与影响面初判
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dumpbin /headers {{driver}}'
+    note: 确认映像类型与节区，先排除拿错文件
+  - cmd: '!object \Device'
+    note: 定位设备对象，确认它是全局命名还是会话内命名
+  - cmd: 'x {{module}}!*Dispatch*'
+    note: 找到处理控制码的分发例程，再回代码核对权限判定
+  pitfalls:
+  - 控制码要求的访问权限与设备访问控制是两道独立检查，只审其一必定漏
+  - 会话内命名设备与全局命名设备可达范围不同，混淆会高估或低估风险
+  - 有权限判定但结果未被用于后续分支，属典型的看起来检查了
+
+- id: tech:kernel-memory-corruption-primitive
+  name: 内存破坏原语分析
+  name_en: Memory Corruption Primitive Analysis
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 把一处内核内存破坏归类为可复现的原语：越界写、释放后使用、类型混淆或未初始化读，并评估它实际能影响哪些数据。难点是稳定性取决于池布局与对象大小，同一缺陷在不同构建上表现可以完全不同。
+  difficulty: 5
+  prerequisites:
+  - tech:ioctl-access-control-review
+  - tech:kernel-pool-forensics
+  - tech:pool-tag-attribution
+  artifacts:
+  - art:memory-dump
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 原语类型与稳定性评估
+  - 受影响对象与数据清单
+  - 缓解措施有效性的判断
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!pool <地址>'
+    note: 确认被破坏地址所属池块与大小，判断越界落在哪个区块
+  - cmd: '!poolused 2'
+    note: 观察同标签对象的分配规模，估算可复用的空洞
+  - cmd: '!analyze -v'
+    note: 从错误码与参数反推破坏类型，先分类再谈影响面
+  pitfalls:
+  - 在调试环境验证出的稳定性不能外推到生产，池布局与验证选项都不同
+  - 把一次崩溃当成原语成立，实际只是踩到了随机未映射页
+  - 忽略对象大小与对齐，会得出可控程度过高的结论
+
+- id: tech:kernel-mitigation-assessment
+  name: 内核缓解机制评估
+  name_en: Kernel Mitigation Assessment
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 逐项确认目标系统的内核缓解状态：执行保护、地址随机化、完整性校验、虚拟化隔离与调用目标保护，并区分默认开启与强制开启。难点是多数开关取决于启动配置、固件设置与硬件能力，必须实测。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-address-space-mapping
+  artifacts:
+  - art:memory-dump
+  - art:pe64
+  outputs:
+  - 缓解机制启用状态表
+  - 每项机制的实际约束结论
+  - 未启用项的风险说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'Get-CimInstance -ClassName Win32_DeviceGuard'
+    note: 读取基于虚拟化的安全状态与已配置服务，判断隔离类缓解是否真的启用
+  - cmd: '!cpuid'
+    note: 确认处理器是否具备相关能力，缓解能否生效先看硬件
+  - cmd: 'bcdedit /enum {current}'
+    note: 核对启动项里的缓解与调试相关开关
+  pitfalls:
+  - 硬件支持不等于已启用，固件与启动配置任一处关闭就整体失效
+  - 把默认开启当成强制，重装或换配置后结论立刻过期
+  - 只查配置不实测，某些缓解对当前这类攻击面并不生效
+
+- id: tech:pointer-leak-analysis
+  name: 指针泄露面分析
+  name_en: Pointer Leak Surface Analysis
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 找出内核向用户态暴露原始指针或可推算基址信息的接口，评估其对地址随机化的削弱程度。难点是泄露常藏在结构体填充、错误信息与统计计数里，且需要一次拿到足够精确的地址才有意义。
+  difficulty: 5
+  prerequisites:
+  - tech:kernel-mitigation-assessment
+  - tech:kernel-memory-corruption-primitive
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  outputs:
+  - 泄露接口清单
+  - 泄露信息精度评估
+  - 随机化削弱程度结论
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: 'lm'
+    note: 取得模块基址范围，用于判断泄露值落在哪个模块内
+  - cmd: '!pte <地址>'
+    note: 验证泄露地址是否有效映射，排除伪造或陈旧值
+  - cmd: 'dt nt!_EPROCESS'
+    note: 确认结构定义，判断某个泄露字段的真实语义
+  pitfalls:
+  - 泄露的是对象内部的相对偏移而非基址，直接当基址用会全盘错位
+  - 泄露值可能被掩码或被系统改写，未验证就使用会得到错误结论
+  - 只在单一进程中验证，跨会话或跨权限边界时该接口可能根本不可达
+
+- id: tech:token-escalation-path
+  name: 令牌提权路径分析
+  name_en: Token Escalation Path Analysis
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 分析从可控内核写入到取得更高权限令牌之间的必要步骤，判断路径上每道检查是否真能拦住。难点是提权不只要改一个字段，完整性级别、特权集与进程状态必须同时自洽，否则立刻被判异常。
+  difficulty: 5
+  prerequisites:
+  - tech:token-privilege-inspection
+  - tech:kernel-memory-corruption-primitive
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 路径步骤与检查点清单
+  - 每步可行性判断
+  - 检测面与对应审计事件
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!token'
+    note: 观察令牌内容与特权启用状态，确认目标状态长什么样
+  - cmd: '!process 0 0'
+    note: 取得进程结构地址，配合类型化视图核对令牌引用
+  - cmd: '!sid <地址>'
+    note: 解析安全标识符，确认目标身份而不是只看账户名
+  pitfalls:
+  - 只改身份不改完整性级别，后续检查会直接把操作拒掉
+  - 令牌是共享对象，随意改写会波及同令牌的其他进程并引发系统不稳
+  - 提权成功不等于可用，会话与桌面隔离仍会挡住部分操作
+
+- id: tech:exploit-behavior-detection
+  name: 利用行为检测特征
+  name_en: Exploit Behavior Detection
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 从崩溃签名、内存权限异常与内核结构不一致中识别利用尝试，区分普通驱动缺陷与有意的利用行为。难点是两者产生的第一现场高度相似，判定必须结合多次触发的模式与目标选择偏好。
+  difficulty: 4
+  prerequisites:
+  - tech:bugcheck-dump-triage
+  - tech:kernel-mitigation-assessment
+  - tech:pointer-leak-analysis
+  artifacts:
+  - art:memory-dump
+  - art:driver
+  - art:kernel-module
+  outputs:
+  - 利用尝试判定结论
+  - 触发模式与证据
+  - 检测规则建议
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: '!analyze -v'
+    note: 从错误码与参数判断是否属于控制流被劫持一类特征
+  - cmd: '!chkimg nt'
+    note: 对比内核映像的代码差异，发现被改写的指令区域
+  - cmd: 'wevtutil qe System /c:50 /rd:true /f:text'
+    note: 读最近的系统日志，找驱动加载与崩溃的相邻关系
+  pitfalls:
+  - 一次崩溃就判定为利用，正常缺陷同样会踩到相同错误码
+  - 只看代码段差异，改写数据结构的类型手法在差异里完全不体现
+  - 日志时间戳精度不足，无法证明加载与崩溃的先后顺序
+
+- id: tech:patchguard-constraint-analysis
+  name: 补丁保护约束分析
+  name_en: Patch Guard Constraint Analysis
+  domain:
+  - dom:wk-exploit
+  parent: dom:wk-exploit
+  def: 分析周期性完整性校验存在时，对关键结构或代码的修改会在多久后被判定为篡改，以及绕过要付出什么。难点是校验周期与校验项不公开且带随机化，绕过方案本身又引入新的可观测面。
+  difficulty: 5
+  prerequisites:
+  - tech:kernel-mitigation-assessment
+  - tech:callback-integrity-audit
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  outputs:
+  - 受校验结构与代码清单
+  - 修改存活时间评估
+  - 检测面与代价说明
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!analyze -v'
+    note: 校验被触发时以固定错误码出现，据此确认是否已被判定篡改
+  - cmd: '!chkimg nt'
+    note: 确认内核代码段是否发生过改写
+  - cmd: 'lm'
+    note: 核对加载模块，判断是否有额外组件参与校验
+  pitfalls:
+  - 用固定间隔估算存活时间，随机化会让实际窗口差一个量级
+  - 只处理结构校验忽略代码校验，两类校验的触发条件不同
+  - 该校验失败的错误码在别的场景也会出现，不能单独作为结论
+
+# ---------------------------------------------------------------------------
+# dom:wk-rootkit —— Rootkit 技术（讲机制与代价，命令一律指向取证与验证）
+# ---------------------------------------------------------------------------
+
+- id: tech:ssdt-hook-detection
+  name: 服务分发表钩子检测
+  name_en: Service Dispatch Table Hook Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测系统服务分发表被改写以重定向系统调用的手法，包括整表替换与表项替换。难点是表位于受保护结构里且合法安全产品也会改写，判断只能靠与干净映像比对，不能只看指针落在哪。
+  difficulty: 4
+  prerequisites:
+  - tech:kernel-symbol-management
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 表项与映像的差异清单
+  - 可疑重定向结论
+  - 合法改写的排除依据
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: '!chkimg nt'
+    note: 对比内核映像的代码差异，用于发现被重定向的入口
+  - cmd: '!object \ObjectTypes'
+    note: 先确认对象类型基线，排除只是类型布局差异造成的误判
+  - cmd: 'lm'
+    note: 核对系统模块加载范围，判断重定向目标落点
+  pitfalls:
+  - 表项地址落在内核映像范围外不一定是恶意，热补丁与安全产品也会这样
+  - 只比对代码段差异，整表被替换到别处的做法不体现在差异里
+  - 比对基准取自被感染的机器，差异自然是零
+
+- id: tech:inline-hook-detection
+  name: 内联钩子检测
+  name_en: Inline Hook Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测函数序言被跳转指令覆盖的内联钩子，并还原被覆盖的原始指令。难点是必须有可信的原始副本做比对，而合法热补丁与安全产品同样会改写同一批函数，形态上几乎无法区分。
+  difficulty: 4
+  prerequisites:
+  - tech:ssdt-hook-detection
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:pe64
+  outputs:
+  - 被改写函数清单
+  - 原始指令还原结果
+  - 跳转目标归属判定
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: 'u {{module}}!<函数名>'
+    note: 反汇编函数开头，确认序言是否被跳转覆盖
+  - cmd: '!chkimg nt'
+    note: 批量比对代码差异，比逐个函数反汇编快得多
+  - cmd: 'dps <地址> L20'
+    note: 顺跳转目标查看附近指针，判断劫持去向
+  pitfalls:
+  - 短跳转与热补丁都在序言写字节，形态相似，只看前几个字节会误判
+  - 参考映像版本与被测机器不一致，差异里混入大量版本噪声
+  - 改写可能只在特定条件成立时生效，静态比对看不到
+
+- id: tech:idt-dpc-chain-audit
+  name: 中断与 DPC 链审计
+  name_en: Interrupt & DPC Chain Audit
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 审计中断描述符与延迟过程调用链是否被替换或插入，识别在中断层介入的手法。难点是这些结构受完整性校验保护且按处理器分布，误报与漏报大多来自只看单个处理器。
+  difficulty: 5
+  prerequisites:
+  - tech:inline-hook-detection
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  outputs:
+  - 中断描述符与处理例程对照表
+  - 各处理器差异清单
+  - 可疑插入项结论
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!idt'
+    note: 列出中断描述符与处理例程，逐项核对是否落在系统模块范围内
+  - cmd: '!dpcs'
+    note: 查看当前处理器上的延迟过程调用队列；换处理器要先切换上下文，该扩展在不同调试器版本可用性不一
+  - cmd: 'lm'
+    note: 核对处理例程落点所属模块
+  pitfalls:
+  - 只查一个处理器，其他处理器上的改写会漏掉
+  - 处理例程落在第三方模块内不一定异常，安全与虚拟化产品会介入中断路径
+  - 队列是动态的，抓取时机不同结果差异很大
+
+- id: tech:driver-object-chain-audit
+  name: 驱动对象链审计
+  name_en: Driver Object Chain Audit
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 审计驱动对象与设备对象链的一致性，发现被摘链却仍能运行的驱动，或只有设备没有驱动记录的残留。难点是摘链后对象继续存活，单看任一链表都会得出干净的错误结论。
+  difficulty: 4
+  prerequisites:
+  - tech:object-manager-namespace
+  - tech:object-reference-tracking
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 驱动与设备对应表
+  - 链间不一致项清单
+  - 可疑残留结论
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: '!object \Driver'
+    note: 枚举驱动对象命名空间；未命名驱动不在其中
+  - cmd: '!object \Device'
+    note: 枚举设备对象，与驱动列表比对找无主设备
+  - cmd: 'lm'
+    note: 与模块列表三方比对，三者不一致才是较可靠的信号
+  pitfalls:
+  - 未命名对象天然不出现在命名空间里，把缺失当摘链会大量误报
+  - 驱动对象与模块加载是两套记录，改了一方另一方可能仍正常
+  - 卸载过程中的短暂不一致属正常，抓取时机要避开卸载窗口
+
+- id: tech:module-unlink-detection
+  name: 模块链摘除检测
+  name_en: Module Unlink Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测驱动从已加载模块链被摘除后继续运行的手法，需靠内存扫描或回调引用反查隐藏模块。难点是被摘除模块不再出现在任何枚举接口里，只能靠残留指针与内存特征去捞，误报率天然偏高。
+  difficulty: 5
+  prerequisites:
+  - tech:driver-object-chain-audit
+  artifacts:
+  - art:memory-dump
+  - art:kernel-module
+  - art:driver
+  outputs:
+  - 隐藏模块候选清单
+  - 捞取依据与证据
+  - 与枚举结果的差异说明
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: 'lm'
+    note: 取当前枚举基线，作为应该看到什么的参照
+  - cmd: '!poolused 2'
+    note: 找异常增长的模块相关池占用，隐藏模块仍然占着内存
+  - cmd: '!pte <候选基址>'
+    note: 确认候选地址是否为有效可执行映射，排除把数据页当模块
+  pitfalls:
+  - 内存里搜到的映像特征可能来自合法缓存或映射文件，需结合可执行属性判断
+  - 摘除只影响一条链，其他记录里可能仍留痕迹，只查一条链必然漏
+  - 反查要读大量内存，操作不当会把目标机直接拖死
+
+- id: tech:callback-chain-concealment
+  name: 回调链隐藏检测
+  name_en: Callback Chain Concealment Detection
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 检测回调注册链被摘除或伪造以隐藏自身的手法，判据是回调集合、模块加载状态与事件实际行为之间的矛盾。难点是合法卸载与恶意摘除在集合变化上完全一致，必须补行为侧证据。
+  difficulty: 5
+  prerequisites:
+  - tech:callback-integrity-audit
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 回调集合差异结论
+  - 行为与注册不符的证据
+  - 隐藏手法判定
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!object \Callback'
+    note: 取回调对象快照，与基线对比
+  - cmd: 'dt nt!_EX_CALLBACK*'
+    note: 通配确认类型定义，避免用错结构解读
+  - cmd: 'lm'
+    note: 核对回调所属模块是否仍加载
+  pitfalls:
+  - 回调集合本身枚举不全，列表里没有不能直接当隐藏
+  - 行为侧证据要主动触发事件，生产环境不宜频繁触发
+  - 伪装成合法安全产品注册的回调，注册信息本身完全正常
+
+- id: tech:boot-stage-persistence-audit
+  name: 引导级持久化审计
+  name_en: Boot Stage Persistence Audit
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 审计在内核加载之前介入的持久化位置：引导配置项、引导管理器组件与固件设置，识别绕过内核层检测的驻留。难点是这类改动在操作系统内看不到完整证据，必须靠启动配置与固件状态交叉核对。
+  difficulty: 5
+  prerequisites:
+  - tech:module-unlink-detection
+  artifacts:
+  - art:driver
+  - art:kernel-module
+  - art:pe64
+  outputs:
+  - 引导配置差异清单
+  - 可疑引导组件
+  - 固件层核对结论
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: 'bcdedit /enum all'
+    note: 导出全部启动项与引导配置，异常项常藏在不常用的条目里
+  - cmd: '!sysinfo machineid'
+    note: 在调试器里查看机器与固件标识，辅助确认引导方式
+  - cmd: 'wevtutil qe System /c:50 /rd:true /f:text'
+    note: 读系统日志找引导阶段的异常记录
+  pitfalls:
+  - 只看当前启动项，备用启动项与其他引导条目里的改动会被忽略
+  - 引导级改动可能同时修改固件设置，只在操作系统侧检查必然不全
+  - 引导阶段日志可能来不及落盘，缺失记录不等于没发生
+
+- id: tech:integrity-check-cost-analysis
+  name: 完整性校验对抗代价
+  name_en: Integrity Check Countermeasure Cost
+  domain:
+  - dom:wk-rootkit
+  parent: dom:wk-rootkit
+  def: 量化绕过周期性完整性校验要付的代价：需要同时处理校验器、受校验结构与校验时序，以及方案自身留下的痕迹。难点是任何绕过都扩大攻击面，而校验项与周期既不公开也不固定。
+  difficulty: 5
+  prerequisites:
+  - tech:idt-dpc-chain-audit
+  - tech:module-unlink-detection
+  - tech:callback-chain-concealment
+  - tech:patchguard-constraint-analysis
+  - tech:exploit-behavior-detection
+  artifacts:
+  - art:kernel-module
+  - art:memory-dump
+  - art:driver
+  outputs:
+  - 代价与可行性评估
+  - 可观测痕迹清单
+  - 检测方视角的判据
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: '!analyze -v'
+    note: 校验被触发时以固定错误码出现，据此确认对抗是否已被发现
+  - cmd: '!chkimg nt'
+    note: 确认内核代码段是否被改写
+  - cmd: 'lm'
+    note: 核对加载模块，判断是否有额外组件参与校验
+  pitfalls:
+  - 用固定周期估算窗口，随机化让实际窗口与估算差一个量级
+  - 只处理结构校验不管代码校验，两类校验触发条件不同
+  - 绕过方案引入的组件本身成了新的可检测对象

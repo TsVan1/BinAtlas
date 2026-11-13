@@ -1,6 +1,5 @@
-# BinAtlas 知识库 · 领域
+# BinAtlas 知识库 · 领域（含子领域，parent 指向上级）
 # 规范：03-DATA-SCHEMA.md §2.1
-# 本批为试点：3 个领域，coverage 均为 partial（工具由 A2 补齐后重评）
 
 - id: dom:firmware
   name: 固件与嵌入式安全
@@ -45,3 +44,293 @@
   coverage: partial
   note: 难度 3 指的是"入门线"：跑隔离环境看行为、读字符串就能出初判，1-2 天可达。 但对抗样本脱壳与家族归因实际在 4-5 档，入门线与专业线差距大是本领域固有特征，
     entry_difficulty 只记入门线，专业难度见各 technique 的 difficulty。
+- id: dom:av-evasion
+  name: 免杀与对抗技术
+  name_en: AV Evasion
+  def: 在保持恶意行为可执行的前提下，绕过杀毒与 EDR 的静态特征与动态行为检测。核心难点是检测方持续演进，任何具体手法都有存活窗口。
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  entry_difficulty: 5
+  coverage: partial
+- id: dom:av-evasion-static
+  name: 静态免杀
+  name_en: Static Evasion
+  def: 改写二进制特征使其不被特征库命中。难点是改完不能破坏原有功能，且要防止哈希与熵特征暴露。
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:av-evasion
+- id: dom:av-evasion-dynamic
+  name: 动态行为免杀
+  name_en: Dynamic Evasion
+  def: 规避运行时行为监控，包括 API 调用链隐藏、内存权限切换与直接系统调用。难点是行为链一旦被完整记录就无法隐藏。
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:av-evasion
+- id: dom:av-evasion-loader
+  name: 加载器与内存执行
+  name_en: Loader & In-Memory Execution
+  def: 把载荷从磁盘或网络载入内存并执行，避免落地文件被扫描。难点是内存扫描与反射式注入检测。
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:av-evasion
+- id: dom:av-evasion-edr
+  name: EDR 与 AV 绕过
+  name_en: EDR/AV Bypass
+  def: 针对具体产品的检测点做定向规避，如钩子摘除、ETW 关闭、回调卸载。难点是每家的检测点与版本都不同。
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:av-evasion
+- id: dom:av-evasion-sandbox
+  name: 沙箱与环境对抗
+  name_en: Sandbox Evasion
+  def: 识别分析环境并延迟或改变行为，让样本在沙箱里表现无害。难点是过度对抗本身会成为可疑信号。
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:av-evasion
+- id: dom:re
+  name: 逆向工程技术
+  name_en: Reverse Engineering
+  def: 从二进制反推设计意图、数据结构与算法。核心难点是没有源码且编译优化会破坏原始语义。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 3
+  coverage: partial
+- id: dom:re-static
+  name: 静态分析
+  name_en: Static Analysis
+  def: 在不运行的前提下理解程序结构、函数边界与数据引用。难点是剥离符号与混淆后信息量急剧下降。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 3
+  coverage: partial
+  parent: dom:re
+- id: dom:re-decompile
+  name: 反编译与伪代码还原
+  name_en: Decompilation
+  def: 把汇编还原成可读的高级语言结构，理解控制流与数据类型。难点是 C++ 模板与内联展开后语义丢失。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:re
+- id: dom:re-dynamic
+  name: 动态调试分析
+  name_en: Dynamic Analysis
+  def: 在运行时观察内存、寄存器与调用栈，验证静态推断。难点是反调试与时间敏感逻辑。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 3
+  coverage: partial
+  parent: dom:re
+- id: dom:re-unpacking
+  name: 加壳与脱壳
+  name_en: Unpacking
+  def: 把运行时解压还原的原始程序从内存中重建。难点是虚拟机保护壳根本没有可还原的原始代码。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:re
+- id: dom:re-lang
+  name: 语言产物逆向
+  name_en: Managed & Native Language Reversing
+  def: 针对 .NET、Go、Rust、易语言等有运行时特征的语言产物做定向还原。难点是各语言运行时的元数据结构差异大。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:re
+- id: dom:re-protocol
+  name: 协议与网络逆向
+  name_en: Protocol Reversing
+  def: 从流量样本反推私有协议字段边界与加密方式。难点是无文档且字段长度可变。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:apk
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:re
+- id: dom:windows-kernel
+  name: Windows 内核技术
+  name_en: Windows Kernel
+  def: 围绕 Windows 内核的对象、回调与内存管理做开发、调试与攻防。核心难点是内核态错误直接蓝屏，且符号与结构随版本变化。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  entry_difficulty: 5
+  coverage: partial
+- id: dom:wk-driver
+  name: 驱动开发基础
+  name_en: Driver Development
+  def: 编写可加载的 WDM/KMDF 驱动，理解入口、设备对象与 IRP 分发。难点是环境搭建与签名要求。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:windows-kernel
+- id: dom:wk-debug
+  name: 内核调试
+  name_en: Kernel Debugging
+  def: 双机调试内核，用断点、调用栈与对象查看定位问题。难点是断点会改变时序导致问题消失。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:windows-kernel
+- id: dom:wk-objects
+  name: 内核对象与结构
+  name_en: Kernel Objects
+  def: 理解 EPROCESS、ETHREAD、对象管理器与内存池布局。难点是结构偏移随版本变化，需要符号或手工还原。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:windows-kernel
+- id: dom:wk-callback
+  name: 回调与过滤驱动
+  name_en: Callbacks & Filter Drivers
+  def: 通过进程/线程/模块回调与文件过滤驱动介入系统行为。难点是回调顺序与兼容性。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:windows-kernel
+- id: dom:wk-exploit
+  name: 内核漏洞利用
+  name_en: Kernel Exploitation
+  def: 把内核内存破坏类漏洞变成可控执行或权限提升。难点是缓解机制（SMEP/SMAP/KASLR/PG）叠加。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:windows-kernel
+- id: dom:wk-rootkit
+  name: Rootkit 技术
+  name_en: Rootkit Techniques
+  def: 通过钩子、回调与对象篡改隐藏自身或指定对象。难点是在 PatchGuard 与完整性检查下存活。
+  artifacts:
+  - art:driver
+  - art:pe64
+  - art:memory-dump
+  - art:kernel-module
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:windows-kernel
+- id: dom:anti-debug
+  name: 调试与反调试技术
+  name_en: Debugging & Anti-Debugging
+  def: 围绕调试器与程序之间的相互探测与规避展开。核心难点是攻防双方都能看到对方痕迹，判断谁在观察谁。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  entry_difficulty: 3
+  coverage: partial
+- id: dom:ad-userdebug
+  name: 用户态调试
+  name_en: User-Mode Debugging
+  def: 用调试器附加用户态进程，控制执行流与观察内存。难点是反调试会让附加直接失败或行为改变。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  entry_difficulty: 3
+  coverage: partial
+  parent: dom:anti-debug
+- id: dom:ad-kerneldebug
+  name: 内核态调试
+  name_en: Kernel-Mode Debugging
+  def: 用 WinDbg 双机或本地内核调试观察内核行为。难点是断点导致超时与目标机假死。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:anti-debug
+- id: dom:ad-detect
+  name: 反调试识别
+  name_en: Anti-Debug Detection
+  def: 识别程序里的反调试手法，包括 API 检测、时间差、异常与硬件断点检查。难点是手法可以组合且无统一特征。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  entry_difficulty: 3
+  coverage: partial
+  parent: dom:anti-debug
+- id: dom:ad-bypass
+  name: 反调试绕过
+  name_en: Anti-Debug Bypass
+  def: 针对已识别的反调试点做补丁、钩子或模拟返回。难点是绕过本身可能被二次检测。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  entry_difficulty: 4
+  coverage: partial
+  parent: dom:anti-debug
+- id: dom:ad-armsrace
+  name: 对抗演进与隐蔽调试
+  name_en: Covert Debugging
+  def: 用硬件断点、虚拟机监控与无痕调试手段降低被察觉概率。难点是不留痕迹与可观测性天然矛盾。
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:driver
+  entry_difficulty: 5
+  coverage: partial
+  parent: dom:anti-debug

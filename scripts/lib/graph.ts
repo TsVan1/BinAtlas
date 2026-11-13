@@ -216,6 +216,14 @@ export interface GraphNode {
   license?: LicenseValue;
   /** 实时层/后续批次可能写入的重要度；没有就不输出 */
   importance?: number;
+  /** 上级领域/子领域 ID；构成目录树（§2.1） */
+  parent?: string;
+  /** 作战手册：命令模板（§2.2） */
+  commands?: { cmd: string; note?: string }[];
+  /** 作战手册：常见坑（§2.2） */
+  pitfalls?: string[];
+  /** 参考链接（§2.2） */
+  references?: string[];
 }
 
 export interface GraphEdge {
@@ -304,6 +312,29 @@ function projectNode(node: CompiledNode): GraphNode {
   if (license !== undefined) out.license = license;
   const importance = readNumber(raw['importance']);
   if (importance !== undefined) out.importance = importance;
+
+  // §2.1 子领域：parent 指向上级 domain
+  const parent = readString(raw['parent']);
+  if (parent !== undefined) out.parent = parent;
+
+  // §2.2 作战手册三件套
+  const rawCommands = raw['commands'];
+  if (Array.isArray(rawCommands)) {
+    const cmds: { cmd: string; note?: string }[] = [];
+    for (const c of rawCommands) {
+      if (c === null || typeof c !== 'object') continue;
+      const rec = c as Record<string, unknown>;
+      const cmd = readString(rec['cmd']);
+      if (cmd === undefined) continue;
+      const note = readString(rec['note']);
+      cmds.push(note === undefined ? { cmd } : { cmd, note });
+    }
+    if (cmds.length > 0) out.commands = cmds;
+  }
+  const pitfalls = readStringArray(raw['pitfalls']);
+  if (pitfalls.length > 0) out.pitfalls = pitfalls;
+  const references = readStringArray(raw['references']);
+  if (references.length > 0) out.references = references;
 
   return out;
 }

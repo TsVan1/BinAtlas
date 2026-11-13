@@ -58,6 +58,7 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
 | `artifacts` | string[] | ✅ | 引用 `art:`；**这是矩阵视图的轴数据** |
 | `entry_difficulty` | 1-5 | ✅ | 见 4.3 |
 | `coverage` | enum | ✅ | `full`=工具与技术都充分 / `partial`=某个维度缺失 / `stub`=仅占位 |
+| `parent` | string | ❌ | 上级 `dom:`。**有 parent 的 domain 即为子领域**，目录树据此展开 |
 
 ---
 
@@ -89,6 +90,14 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
 | `cost` | enum | ✅ | `low` / `medium` / `high` |
 | `false_positive_risk` | enum | ✅ | `low` / `medium` / `high` |
 | `note` | string | ❌ | 边界说明、与其他领域的重叠风险、前置的条件性 |
+| `parent` | string | ❌ | 上级 `dom:`（子领域或领域）；构成目录树。缺省则按 `domain[]` 归到领域下 |
+| `commands` | obj[] | ❌ | **作战手册核心**：`{cmd, note}`。命令模板用 `{{占位符}}` |
+| `pitfalls` | string[] | ❌ | 常见坑，每条一句话 |
+| `references` | string[] | ❌ | 参考链接 |
+
+> `commands` 是本系统从「词条」变成「手册」的关键字段。**允许在 cmd 里出现工具名**
+> （命令本来就要用工具），但 `def`/`name` 里仍不写工具名——工具归属由 `uses` 边表达。
+> 命令模板必须用 `{{binary}}`/`{{firmware}}` 这类占位符，不得绑定具体样本文件名。
 
 **关键**：`outputs` 决定流水线能否串起来——上游的 outputs 必须能对上下游的输入。A3 据此判断能不能连 `upstream`。
 

@@ -1,0 +1,1269 @@
+# BinAtlas 知识库 · 技术 / 免杀与对抗技术
+# 规范：03-DATA-SCHEMA.md §2.2（含 parent / commands / pitfalls / references）
+# 覆盖 dom:av-evasion 的 5 个子领域，每领域 8 条，共 40 条。
+# 写法约定：def 只讲「做什么 + 核心难点」，工具归属由 uses 边表达；
+#          commands 一律取检查/验证/遥测取证视角，不给可直接复现的完整链路。
+
+# ---------------------------------------------------------------------------
+# dom:av-evasion-static —— 静态免杀（8 条）
+# ---------------------------------------------------------------------------
+
+- id: tech:static-detection-surface-recon
+  name: 静态特征面测绘
+  name_en: Static Detection Surface Recon
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 在本地复现静态判定的各个输入面：文件哈希、字符串、导入表、节区布局与签名状态，定位样本会被哪类规则命中。难点是引擎不公开规则，只能靠规则集与多引擎结论反推。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  - art:script
+  outputs:
+  - 命中面清单（哈希/字符串/导入/节区/签名各是否触发）
+  - 待改字段与结构列表
+  - 改动前的哈希与签名基线
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'Get-FileHash -Algorithm SHA256 {{binary}}'
+    note: 记录基线哈希；每次改动后重算，确认改动确实改变了文件指纹而不是只改了注释。
+  - cmd: 'sigcheck -a -h -nobanner {{binary}}'
+    note: 一次拿到版本信息、签名状态与多种哈希，判断文件是否已签名、签名是否仍有效。
+  - cmd: 'capa {{binary}}'
+    note: 用能力规则匹配导入与代码特征，先看清样本被哪些行为族规则覆盖，再决定改哪一面。
+  pitfalls:
+  - 只改哈希避不开静态检测，引擎同时看字符串、导入表与节区统计特征。
+  - 单引擎的结论不能外推，同一个文件在不同产品上判定经常相反。
+  - shellcode 没有文件头，哈希与字符串之外的判据要换成字节序列与熵。
+
+- id: tech:pe-section-reshape
+  name: 节区布局重构
+  name_en: PE Section Reshape
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 调整节区数量、顺序、名称与对齐，改变文件布局与统计特征，同时保证加载器仍能正确映射。难点是节表偏移、镜像大小与重定位等头部字段必须同步修正，改错即加载失败。
+  difficulty: 2
+  prerequisites:
+  - tech:static-detection-surface-recon
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 重构后的节表与头部字段
+  - 加载可用的验证记录
+  - 改动前后布局对比
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dumpbin /headers {{binary}}'
+    note: 核对节表条目、文件与内存对齐、SizeOfImage；改完必须逐项复验这几处。
+  - cmd: 'objdump -h {{binary}}'
+    note: 换一个解析器看节区偏移与大小，确认改后的布局没有让两个工具读出不同结果。
+  - cmd: 'python3 -c "import pefile; pe=pefile.PE(''{{binary}}''); print([(s.Name, hex(s.PointerToRawData), hex(s.Misc_VirtualSize)) for s in pe.sections])"'
+    note: 打印节名、原始数据偏移与虚拟大小，作为改动前后的对照表。
+  pitfalls:
+  - 节区名与顺序改得过于随机本身就是异常，真实编译器产出的命名有固定习惯。
+  - 节表条目过多会把节表推到镜像之外，加载时直接报错而非静默失败。
+  - 对已签名文件做任何字节改动都会使签名失效，改之前先确认签名状态。
+
+- id: tech:import-table-concealment
+  name: 导入表隐藏
+  name_en: Import Table Concealment
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 不让敏感函数出现在静态导入表里，改由运行时解析模块导出获得地址。难点是解析过程本身要留下字符串与调用序列，而完整剥离导入又会让文件看起来不像正常程序。
+  difficulty: 3
+  prerequisites:
+  - tech:static-detection-surface-recon
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 精简后的导入表
+  - 运行时解析点清单
+  - 静态可见的高危导入残留
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dumpbin /imports {{binary}}'
+    note: 列出全部静态导入；改完后重复执行，确认高危函数已从导入表消失。
+  - cmd: 'rabin2 -i {{binary}}'
+    note: 用另一个解析器交叉核对导入，避免工具自身对畸形导入表容错而漏看。
+  pitfalls:
+  - 完全空的导入表比可疑导入更显眼，正常程序不可能一个导入都没有。
+  - 运行时解析增加首次执行延迟与失败面，解析失败时通常没有任何错误信息。
+  - 解析得到的调用点仍会被内存扫描按行为归因，静态干净不等于动态干净。
+
+- id: tech:self-decrypting-stub
+  name: 自解密引导段
+  name_en: Self-Decrypting Stub
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 把主体代码加密成数据，由入口处的引导段在运行时解密回可执行页再跳转。难点是解密循环与内存权限切换是最先被规则覆盖的行为特征，解密失败也没有任何报错线索。
+  difficulty: 4
+  prerequisites:
+  - tech:pe-section-reshape
+  - tech:import-table-concealment
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  outputs:
+  - 加密后数据段与引导段的分界
+  - 解密循环的调用序列与耗时
+  - 解密失败模式清单
+  cost: medium
+  false_positive_risk: low
+  note: 与 tech:executable-unpacking 方向相反：本条关心怎么造壳，脱壳那条关心怎么拆壳。
+  commands:
+  - cmd: 'python3 -c "import pefile; pe=pefile.PE(''{{binary}}''); print([(s.Name, round(s.get_entropy(), 2)) for s in pe.sections])"'
+    note: 逐节算熵，定位哪一节是加密数据、哪一节是引导代码；正常代码段熵通常在 6 附近。
+  - cmd: 'objdump -d {{binary}}'
+    note: 从入口点往下读引导段，确认解密循环的边界与写入目标，判断是否落在同一节。
+  pitfalls:
+  - 解密后代码页要从可写改成可执行，这一步页属性变化本身就是检测点。
+  - 引导段与主体的节区熵差会把「数据段其实将被执行」这条推断直接坐实。
+  - 多线程下解密与执行存在竞争，触发顺序不稳会表现为随机崩溃而非稳定失败。
+
+- id: tech:string-and-constant-obfuscation
+  name: 字符串与常量混淆
+  name_en: String and Constant Obfuscation
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 让敏感字符串不以明文落盘：运行时在栈上构造，或存为编码后由解码函数还原。难点是编译优化会把构造过程折叠回常量，且解码代码形态固定，很容易被写成检测规则。
+  difficulty: 2
+  prerequisites:
+  - tech:static-detection-surface-recon
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  - art:script
+  outputs:
+  - 明文残留清单
+  - 编解码点清单与调用开销
+  - 优化后的常量折叠情况
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'strings -n 6 {{binary}}'
+    note: 常规明文字符串基线；改完重复执行，确认目标字符串不再出现。
+  - cmd: 'floss {{binary}}'
+    note: 抽取运行时构造与解码出来的字符串，栈上构造的字符串仍可能在这里露出。
+  - cmd: 'rabin2 -zz {{binary}}'
+    note: 换个工具再看一遍宽字符与异常编码的字符串，避免只按单字节扫描漏掉。
+  pitfalls:
+  - 高优化级别下栈上逐字节构造会被编译器折叠回常量，白改一场。
+  - 解码函数的指令形态固定，规则往往命中解码逻辑本身而不是密文。
+  - 宽字符与 UTF-16 明文经常被单字节扫描漏掉，误以为已经清干净。
+
+- id: tech:export-hash-resolution
+  name: 导出名哈希解析
+  name_en: Export Name Hash Resolution
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 只保存函数名哈希，运行时遍历目标模块的导出表比对，避免明文函数名出现在文件里。难点是哈希冲突与导出表布局必须严格匹配目标系统，任何版本差异都会解析失败。
+  difficulty: 3
+  prerequisites:
+  - tech:import-table-concealment
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  outputs:
+  - 哈希表与函数的一一对应清单
+  - 冲突检测结果
+  - 目标系统导出表结构核对记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dumpbin /exports C:\Windows\System32\kernel32.dll'
+    note: 以磁盘副本为基线导出函数名与序号，确认要用的名字确实在这个模块上。
+  - cmd: 'objdump -p {{binary}}'
+    note: 看导入/导出目录的目录项结构，确认遍历导出表时按名表还是按序号表取值。
+  pitfalls:
+  - 哈希冲突会解析到错误函数，调用时表现为莫名崩溃而不是解析报错。
+  - 导出名大小写与前缀（宽字符版与窄字符版）处理不一致会大面积解析失败。
+  - 遍历导出表要求模块已加载，而主动加载模块这个动作本身又是可观测的。
+
+- id: tech:packer-parameter-tuning
+  name: 加壳参数调优
+  name_en: Packer Parameter Tuning
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 用现成压缩壳处理体积与熵分布，并调整参数让结果落在同类正常软件的区间内。难点是主流壳家族的引导段特征早被规则覆盖，壳化后的高熵与异常入口反而提高可疑度。
+  difficulty: 2
+  prerequisites:
+  - tech:pe-section-reshape
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 加壳前后体积与逐节熵对比
+  - 壳特征残留评估
+  - 可还原性验证结果
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'upx -9 -o {{out}} {{binary}}'
+    note: 用最高压缩档做对照实验，观察体积与熵能压到什么程度，作为调参基准。
+  - cmd: 'upx -d {{binary}} -o {{out}}'
+    note: 验证壳是否可逆、还原后功能是否完整；不可逆的壳在后续维护上代价很高。
+  - cmd: 'python3 -c "import pefile; pe=pefile.PE(''{{binary}}''); print([(s.Name, round(s.get_entropy(), 2)) for s in pe.sections])"'
+    note: 加壳后逐节熵通常逼近 8；如果连代码段都可写，静态判据会直接命中。
+  pitfalls:
+  - 壳名与版本能从引导段字节里直接识别，换壳比调参更有效。
+  - 压缩后高熵加可写代码段是经典静态判据，压得越狠不一定越安全。
+  - 对已签名文件加壳必然破坏签名，签名一断反而多一条可疑信号。
+
+- id: tech:compiler-artifact-shaping
+  name: 编译期特征改造
+  name_en: Compiler Artifact Shaping
+  domain:
+  - dom:av-evasion-static
+  parent: dom:av-evasion-static
+  def: 用编译与链接选项去掉调试信息、运行时类型信息与固定文件指纹，改变工具链留下的默认痕迹。难点是各工具链的默认特征（启动代码、异常表、节名、清单）本身就是可识别指纹。
+  difficulty: 2
+  prerequisites:
+  - tech:static-detection-surface-recon
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 调试目录与符号残留清单
+  - 工具链指纹评估
+  - 精简前后的体积与节区对比
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'dumpbin /headers {{binary}}'
+    note: 查看调试目录、链接器版本与 DllCharacteristics，这几处常直接暴露工具链与构建方式。
+  - cmd: 'strings -n 8 {{binary}}'
+    note: 挖残留的源码路径、编译机路径与符号名；很多「已删调试信息」的样本在这里露馅。
+  - cmd: 'objdump -h {{binary}}'
+    note: 对比节区组合，静态链接与动态链接的默认节集合差别很大，也是指纹的一部分。
+  pitfalls:
+  - 删掉调试目录不等于删干净，部分工具链把源码路径写进只读数据段。
+  - 静态链接会把第三方库的特征一起带进来，反而更容易被归类到某个家族。
+  - 版本信息与清单全部留空，与商业软件的正常形态不符，本身就可疑。
+
+# ---------------------------------------------------------------------------
+# dom:av-evasion-dynamic —— 动态行为免杀（8 条）
+# ---------------------------------------------------------------------------
+
+- id: tech:userland-hook-removal
+  name: 用户态钩子还原
+  name_en: Userland Hook Removal
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 用磁盘副本覆盖进程内被安全产品改写过的系统库代码，让敏感调用回到原始路径。难点是覆盖动作本身涉及内存写与页权限切换，产生的遥测比被绕过的调用更显眼。
+  difficulty: 4
+  prerequisites:
+  - tech:userland-hook-mapping
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 被改写函数清单与改写字节
+  - 还原前后的调用行为差异
+  - 还原动作自身的可观测事件
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'dumpbin /exports C:\Windows\System32\ntdll.dll'
+    note: 以磁盘副本建立导出基线，确认目标函数确实由这个模块导出。
+  - cmd: 'Get-FileHash -Algorithm SHA256 C:\Windows\System32\ntdll.dll'
+    note: 磁盘副本哈希；与内存副本比对时，不一致说明内存里的代码被改过。
+  - cmd: 'pe-sieve64.exe /pid {{pid}}'
+    note: 扫描目标进程的模块与内存异常，看覆盖动作是否留下不寻常的页或模块状态。
+  pitfalls:
+  - 内核态回调与内核侧遥测不受用户态代码覆盖影响。
+  - 部分产品会周期性重新挂钩，还原后的干净窗口很短，时序不稳就会失败。
+  - 还原后模块内存与磁盘完全一致，这件事本身就是与常规进程的差异。
+
+- id: tech:direct-system-call
+  name: 直接系统调用
+  name_en: Direct System Call
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 不经过系统库包装层，按目标系统对应的系统调用编号直接进内核，跳过用户态钩子与提供者埋点。难点是编号随系统版本变化，且调用来自非模块内存本身即是强异常特征。
+  difficulty: 4
+  prerequisites:
+  - tech:userland-hook-removal
+  - tech:export-hash-resolution
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  outputs:
+  - 系统调用编号与导出名映射表
+  - 目标系统版本核对记录
+  - 非模块内存调用的可观测性评估
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'dumpbin /exports C:\Windows\System32\ntdll.dll'
+    note: 确认目标函数存在，并核对它在导出名表里的相对顺序；编号与顺序强相关。
+  - cmd: 'Get-CimInstance Win32_OperatingSystem | Select-Object Version,BuildNumber'
+    note: 记录目标系统的精确版本；编号表按版本变化，跨版本硬编码必然错位。
+  pitfalls:
+  - 编号硬编码在跨版本运行时必然错位，表现是直接崩溃而不是功能异常。
+  - 返回地址落在非模块内存会被栈回溯发现，绕过包装层不等于隐去来源。
+  - 部分产品已把「调用编号与函数不匹配」作为独立告警项，比原始调用更醒目。
+
+- id: tech:memory-permission-sequencing
+  name: 内存权限时序控制
+  name_en: Memory Permission Sequencing
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 把一次性申请可读可写可执行拆成多次权限变更，缩短同一页同时可写可执行的时间窗口。难点是页属性变更序列与调用栈仍可关联还原，拆得越细调用越多也越显眼。
+  difficulty: 3
+  prerequisites:
+  - tech:self-decrypting-stub
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  - art:memory-dump
+  outputs:
+  - 页属性变更序列
+  - 同时可写可执行的时间窗口测量
+  - 私有提交内存的统计特征
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'pe-sieve64.exe /pid {{pid}}'
+    note: 扫描进程内存里的可疑页与模块，看时序拆分后是否仍被标出可执行私有内存。
+  - cmd: 'procdump -ma {{pid}} {{out}}'
+    note: 抓全量转储，用来复核内存里是否残留可执行页与解密后的明文。
+  - cmd: 'vol -f {{out}} windows.malfind'
+    note: 从转储里反查可执行私有页；时序拆分不会改变这些页最终仍需可执行。
+  pitfalls:
+  - 中间态的可写私有页在统计上依然突出，拆分只改变顺序不改变总量。
+  - 频繁改页权限会按频率被聚合，调用次数越多越容易被单独判定。
+  - 页大小随架构变化，按 4KB 假设处理大页环境会越界或漏页。
+
+- id: tech:call-stack-spoofing
+  name: 调用栈伪装
+  name_en: Call Stack Spoofing
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 让敏感调用的栈帧中返回地址指向合法模块，使基于栈回溯的行为归因失效。难点是各版本的栈展开结构与控制流保护检查不同，一处帧不合规即可被完整回溯推翻。
+  difficulty: 5
+  prerequisites:
+  - tech:direct-system-call
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 栈帧布局与展开信息核对表
+  - 控制流保护状态
+  - 回溯结果与实际调用的偏离点
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: 'dumpbin /headers {{binary}}'
+    note: 查 DllCharacteristics 里的控制流保护与高熵地址标志，决定伪造帧能否通过检查。
+  - cmd: 'Get-ProcessMitigation -System'
+    note: 查系统级控制流保护默认策略，判断目标环境是否强制校验间接跳转目标。
+  pitfalls:
+  - 开启控制流保护时，跳到非合法目标的间接调用会直接终止进程。
+  - 展开信息与真实栈不匹配的后果是崩溃，而不是「看起来像合法调用」。
+  - x64 与 ARM64 的栈布局与返回地址保存方式不通用，跨架构照搬必然失败。
+
+- id: tech:behavior-chain-splitting
+  name: 行为链拆分
+  name_en: Behavior Chain Splitting
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 把一条完整行为链拆到不同进程、不同时间窗甚至不同主机上，使单点遥测看不到前后因果。难点是父进程关系、句柄继承与网络五元组仍能把拆开的片段重新串起来。
+  difficulty: 4
+  prerequisites:
+  - tech:telemetry-baseline-measurement
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:pcap
+  outputs:
+  - 拆分后的片段与各自的可观测事件
+  - 跨片段关联线索清单
+  - 单点视角与全局视角的差异说明
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'wevtutil qe Microsoft-Windows-Sysmon/Operational /q:"*[System[(EventID=1)]]" /c:10 /rd:true /f:text'
+    note: 拉最近的进程创建事件，检查父进程链是否已把拆开的片段重新串起来。
+  - cmd: 'wevtutil qe Microsoft-Windows-Sysmon/Operational /q:"*[System[(EventID=3)]]" /c:10 /rd:true /f:text'
+    note: 看网络连接事件里的源进程，跨主机的片段常在这里重新对上号。
+  pitfalls:
+  - 拆完每段行为都更短促，反而更符合「高度异常进程」的画像。
+  - 跨进程的句柄传递会留下可追踪的来源，拆分点本身就是线索。
+  - 父进程链一旦断裂或伪造，比原始行为更容易被单独标出。
+
+- id: tech:etw-provider-suppression
+  name: ETW 提供者抑制
+  name_en: ETW Provider Suppression
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 在进程内让脚本与运行时相关的提供者停止上报，抹掉内存与脚本内容事件。难点是提供者状态变更自身会触发告警，且内核态会话不受进程内改动的任何影响。
+  difficulty: 4
+  prerequisites:
+  - tech:telemetry-baseline-measurement
+  artifacts:
+  - art:pe-dotnet
+  - art:script
+  - art:pe64
+  outputs:
+  - 提供者清单与默认启用状态
+  - 抑制前后的日志量对比
+  - 状态变更本身产生的告警记录
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'logman query providers | findstr /i "DotNET"'
+    note: 列出运行时相关提供者及其 GUID，先确认目标事件由哪个提供者上报；这条只能列全部再筛，不能按名字单查。
+  - cmd: 'logman query -ets'
+    note: 列当前已启用的跟踪会话，确认有没有内核侧会话在采集；抑制动作对这类会话无效。
+  - cmd: 'wevtutil el'
+    note: 列事件通道，判断事件是只进跟踪会话，还是同时落进可查的日志通道。
+  pitfalls:
+  - 关闭提供者的调用点与正常程序的行为分布格格不入，容易被单点命中。
+  - 内核态采集器运行在进程之外，进程内改动对它完全无效。
+  - 提供者状态变化往往被单独埋点，抑制动作比原始事件更醒目。
+
+- id: tech:callback-based-execution
+  name: 回调机制执行
+  name_en: Callback-Based Execution
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 把执行入口挂到系统既有的回调与线程池机制上，避免显式的远程线程创建动作。难点是回调注册的函数组合已被行为规则覆盖，且回调来源模块与注册栈会暴露加载路径。
+  difficulty: 4
+  prerequisites:
+  - tech:cross-process-execution
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  outputs:
+  - 回调注册点与触发条件
+  - 触发延迟与参数可用性评估
+  - 对应遥测事件清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'wevtutil qe Microsoft-Windows-Sysmon/Operational /q:"*[System[(EventID=8)]]" /c:10 /rd:true /f:text'
+    note: 查远程线程创建事件；改用回调后这类事件应当消失，可用来验证是否真的绕开了。
+  - cmd: 'wevtutil qe Microsoft-Windows-Sysmon/Operational /q:"*[System[(EventID=10)]]" /c:20 /rd:true /f:text'
+    note: 查进程句柄访问事件，注册回调前必须先拿到目标进程，这一步无法省掉。
+  pitfalls:
+  - 回调触发的时机不可控，参数与上下文常常不是想要的，失败率比显式线程高。
+  - 注册即代表载荷已进入目标进程，前置的写入步骤仍然是暴露点。
+  - 线程池回调可能延迟数秒才执行，调试时极易误判成加载失败。
+
+- id: tech:telemetry-baseline-measurement
+  name: 遥测基线测量
+  name_en: Telemetry Baseline Measurement
+  domain:
+  - dom:av-evasion-dynamic
+  parent: dom:av-evasion-dynamic
+  def: 先在可控实验机上记录系统自带遥测能看到哪些事件与字段，再据此量化每种手法的可观测性。难点是采集器配置会改变系统行为，基线也无法跨机器与跨版本迁移。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pcap
+  - art:memory-dump
+  - art:pe64
+  outputs:
+  - 事件类别与字段清单
+  - 每种手法的可观测性评分
+  - 基线环境配置快照
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'logman query -ets'
+    note: 列当前运行的跟踪会话；基线必须记录这一点，否则不同次测量不可比。
+  - cmd: 'wevtutil el'
+    note: 列全部日志通道，先确认哪些通道默认开启、哪些需要手工打开。
+  - cmd: 'Get-WinEvent -LogName Microsoft-Windows-Sysmon/Operational -MaxEvents 20'
+    note: 抽样读少量事件，确认字段是否齐全；字段缺失时后续所有归因都会错。
+  pitfalls:
+  - 开着完整审计的机器与被测机器不是一个环境，基线不能混用。
+  - 事件时间戳精度与队列丢弃会让因果顺序错乱，跨进程关联尤其明显。
+  - 基线只覆盖系统自带日志，产品侧遥测完全不可见，评分会系统性偏高。
+
+# ---------------------------------------------------------------------------
+# dom:av-evasion-loader —— 加载器与内存执行（8 条）
+# ---------------------------------------------------------------------------
+
+- id: tech:reflective-module-loading
+  name: 反射式模块加载
+  name_en: Reflective Module Loading
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 在进程内手工完成映像映射、重定位与导入解析，使模块不经过系统加载器也不在文件系统留痕。难点是 TLS 回调、异常表与控制流保护注册都要手工补齐，缺一项即崩。
+  difficulty: 5
+  prerequisites:
+  - tech:pe-section-reshape
+  - tech:import-table-concealment
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  - art:memory-dump
+  outputs:
+  - 内存映像的段布局与基址
+  - 重定位与导入解析完成度
+  - 与系统加载结果的差异清单
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: 'dumpbin /headers {{binary}}'
+    note: 先确认映像的节对齐、重定位目录与异常目录是否齐全，缺目录的手法必须另行处理。
+  - cmd: 'pe-sieve64.exe /pid {{pid}}'
+    note: 扫进程里不在模块链表中却有 PE 头的内存，反射加载的痕迹通常在这里被标出。
+  - cmd: 'procdump -ma {{pid}} {{out}}'
+    note: 抓全量转储，用于离线复核映像基址、节布局与是否残留磁盘路径。
+  pitfalls:
+  - 未注册异常表时任何 C++ 异常都会直接终止进程，表现在首次出错就无栈退出。
+  - 忽略 TLS 回调会漏掉初始化，功能在少数路径上失效且极难定位。
+  - 系统维护的模块链表里没有这个映像，这件事本身就是强异常信号。
+
+- id: tech:position-independent-stub
+  name: 位置无关执行桩
+  name_en: Position-Independent Stub
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 把载荷组织成不含绝对地址与导入表的机器码，由桩自行定位所需系统函数。难点是每种架构的指令编码与调用约定都要单独处理，且桩必须自己解决内存可执行权限。
+  difficulty: 3
+  prerequisites:
+  - tech:compiler-artifact-shaping
+  artifacts:
+  - art:shellcode
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 无重定位的机器码段
+  - 桩与载荷的寄存器与栈约定
+  - 各架构下的等价实现清单
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'objdump -D -b binary -m i386:x86-64 {{payload}}'
+    note: 反汇编裸机器码必须显式指定架构与输入格式，否则地址与指令边界全部错位。
+  - cmd: 'xxd -l 64 {{payload}}'
+    note: 看开头几十字节，确认没有残留的绝对地址或调用约定外的前置字节。
+  pitfalls:
+  - 反汇编裸机器码不指定架构就得不到可信的指令边界，读出来的全是错的。
+  - 桩与载荷之间的寄存器状态没约定清楚，参数会在第一跳就丢失。
+  - 各架构没有等价指令，同一份逻辑在 ARM64 上需要完全重写而不是改寄存器名。
+
+- id: tech:network-stage-fetch
+  name: 网络分阶段加载
+  name_en: Network Staged Loading
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 磁盘上只保留体积极小、功能单一的引导器，主体在运行时经网络取回并直接在内存执行。难点是网络取回与内存执行叠加后遥测密度骤增，域名与流量特征也是最先被拦的一环。
+  difficulty: 3
+  prerequisites:
+  - tech:position-independent-stub
+  artifacts:
+  - art:shellcode
+  - art:pcap
+  - art:pe32
+  outputs:
+  - 分阶段边界与各阶段体积
+  - 外联时序与流量特征
+  - 首跳失败时的降级路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'tshark -r {{out}} -Y "http.request"'
+    note: 从抓包里过滤出 HTTP 请求，核对取回阶段的时序、Host 与请求路径特征。
+  - cmd: 'tshark -r {{out}} -T fields -e ip.dst -e tcp.dstport'
+    note: 只导出目的地址与端口，快速看连接分布是否存在明显的单点集中。
+  pitfalls:
+  - 首次外联的域名信誉往往就是阻断点，域名新注册本身已足够可疑。
+  - 短会话加大体积下载的组合非常突出，正常软件很少这样拉取内容。
+  - TLS 指纹与系统默认客户端不一致时，不解密也能被识别出异常。
+
+- id: tech:cross-process-execution
+  name: 跨进程执行
+  name_en: Cross-Process Execution
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 借助系统提供的跨进程内存操作与执行机制，让载荷在另一个进程的上下文里运行。难点是每一步都对应明确的遥测事件（进程句柄、内存写入、线程或回调创建），组合即被检出。
+  difficulty: 4
+  prerequisites:
+  - tech:reflective-module-loading
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:memory-dump
+  outputs:
+  - 目标进程选择依据
+  - 每一步对应的遥测事件
+  - 失败点与回滚路径
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'wevtutil qe Microsoft-Windows-Sysmon/Operational /q:"*[System[(EventID=10)]]" /c:20 /rd:true /f:text'
+    note: 查进程句柄访问事件，拿到目标进程这一步就有记录，是最先暴露的环节。
+  - cmd: 'pe-sieve64.exe /pid {{pid}}'
+    note: 扫目标进程里不属于任何磁盘模块的可执行内存，判断载荷是否已落进去。
+  pitfalls:
+  - 完整性级别限制使低权限进程无法写入高权限进程，选错目标直接失败。
+  - 目标进程架构必须一致，32 位载荷进 64 位进程会在首条指令就崩。
+  - 被写入进程异常退出会把载荷一并带走，持久性远低于直觉。
+
+- id: tech:module-hollowing
+  name: 模块映像覆盖
+  name_en: Module Image Overwrite
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 借一个已加载的合法模块占位，再改写其内存映像，使模块列表与实际内容不一致。难点是内存与磁盘映像的哈希比对足以发现，且原始入口被覆盖后进程稳定性很差。
+  difficulty: 4
+  prerequisites:
+  - tech:cross-process-execution
+  - tech:reflective-module-loading
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:memory-dump
+  outputs:
+  - 被覆盖模块与原始哈希
+  - 内存与磁盘映像的差异区段
+  - 稳定性与清理行为记录
+  cost: high
+  false_positive_risk: low
+  commands:
+  - cmd: 'pe-sieve64.exe /pid {{pid}}'
+    note: 重点看「模块映像与磁盘不一致」这一类结果，覆盖手法在这里最难藏。
+  - cmd: 'Get-FileHash -Algorithm SHA256 {{binary}}'
+    note: 磁盘副本哈希；与内存中同名模块比对，不一致就是覆盖的直接证据。
+  - cmd: 'procdump -ma {{pid}} {{out}}'
+    note: 抓转储后离线比对节内容，定位被改写的是代码段还是仅改了入口。
+  pitfalls:
+  - 内存副本与磁盘副本不一致是首要检测点，任何覆盖都逃不掉这一比。
+  - 覆盖后重定位与导入仍指向原模块，调用外部函数会直接崩。
+  - 模块被卸载或进程退出时的清理流程会触碰已被改写的数据，表现为退出即崩。
+
+- id: tech:encrypted-payload-residency
+  name: 加密载荷驻留
+  name_en: Encrypted Payload Residency
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 让载荷在磁盘与内存中长期保持加密态，只在执行前的短窗口内解密，缩小可被内存扫描捕获的时间。难点是解密瞬间的明文页与解密循环仍是确定性证据，密钥分发也要单独解决。
+  difficulty: 4
+  prerequisites:
+  - tech:self-decrypting-stub
+  artifacts:
+  - art:shellcode
+  - art:memory-dump
+  - art:pe32
+  outputs:
+  - 加密态与明文态的驻留时长
+  - 内存中明文页的可捕获窗口
+  - 密钥来源与更新方式
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'procdump -ma {{pid}} {{out}}'
+    note: 抓转储，复核解密窗口内是否有明文页留在内存里。
+  - cmd: 'vol -f {{out}} windows.malfind'
+    note: 从转储反查可执行私有页，解密产物最终一定会落成这样的页。
+  - cmd: 'strings -n 8 {{out}}'
+    note: 在转储里找明文特征串，判断解密后的内容是否已写入可被转储的区域。
+  pitfalls:
+  - 解密后必须落到可执行页，页属性与内存来源同时暴露，缩短窗口不等于消除证据。
+  - 内存转储里出现的明文会永久留痕，一次误转储就等于全程曝光。
+  - 密钥硬编码在文件里，等于把加密降级成编码，静态一眼可还原。
+
+- id: tech:resource-payload-carrier
+  name: 资源承载载荷
+  name_en: Resource Payload Carrier
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 把载荷作为资源或附加数据嵌入宿主文件，加载器运行时自行读取并还原。难点是资源目录的结构完整性必须保证，体积与熵的异常也会直接触发静态判定。
+  difficulty: 3
+  prerequisites:
+  - tech:pe-section-reshape
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:document
+  outputs:
+  - 资源目录结构与载荷位置
+  - 文件体积与熵的异常评估
+  - 读取失败时的降级行为
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'wrestool -l {{binary}}'
+    note: 列资源树，确认载荷挂在哪个类型与 ID 下，以及资源目录是否仍然合法。
+  - cmd: 'dumpbin /headers {{binary}}'
+    note: 核对资源目录的 RVA 与大小；改坏目录后文件仍能运行，但读取会静默失败。
+  - cmd: 'python3 -c "import pefile; pe=pefile.PE(''{{binary}}''); print(hex(pe.get_overlay_data_start_offset()))"'
+    note: 取附加数据起点；返回 0 或空说明没有尾部数据，载荷一定在资源里。
+  pitfalls:
+  - 资源段体积异常与高熵比明文载荷更显眼，藏得越整齐越容易被统计规则挑出。
+  - 附加数据挂在文件尾部，改动任何更靠前的头部偏移都可能让它失效。
+  - 资源目录被改坏后文件照常启动，但取载荷时静默失败，排查方向极易跑偏。
+
+- id: tech:loader-failure-diagnostics
+  name: 加载失败定位
+  name_en: Loader Failure Diagnostics
+  domain:
+  - dom:av-evasion-loader
+  parent: dom:av-evasion-loader
+  def: 把内存执行失败定位到具体阶段：映射、重定位、导入解析、TLS 还是入口，再逐个复现排除。难点是失败常表现为无栈的直接崩溃，而附加调试器又会改变内存布局与时序。
+  difficulty: 3
+  prerequisites:
+  - tech:reflective-module-loading
+  artifacts:
+  - art:memory-dump
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 失败阶段判定
+  - 崩溃地址与所属内存区
+  - 各阶段最小复现用例
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'procdump -ma {{pid}} {{out}}'
+    note: 在无调试器附加的情况下抓崩溃现场，避免调试器把时序问题掩盖掉。
+  - cmd: 'cdb -z {{out}} -c "!analyze -v; q"'
+    note: 直接分析转储给结论，重点看崩溃地址落在哪个模块或哪个未映射区间。
+  - cmd: 'dumpbin /headers {{binary}}'
+    note: 回头核对映像头里的重定位与异常目录是否真的存在，很多失败源于目录为空。
+  pitfalls:
+  - 崩溃地址落在未映射区间时转储里没有任何调用栈，只能靠内存区归属反推。
+  - 调试器会让依赖时序的崩溃消失，必须保留一份不带调试器的对照。
+  - 32 位与 64 位转储要用对应版本的调试器打开，混用会得到误导性结论。
+
+# ---------------------------------------------------------------------------
+# dom:av-evasion-edr —— EDR 与 AV 绕过（8 条）
+# ---------------------------------------------------------------------------
+
+- id: tech:security-product-inventory
+  name: 安全产品清单测绘
+  name_en: Security Product Inventory
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 先枚举目标机上实际存在的安全产品、驱动与文件系统过滤器，确定面对的是哪几套检测面与版本。难点是没有统一注册位置，产品常以服务、驱动、管理接口三种形态同时存在。
+  difficulty: 1
+  prerequisites: []
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 产品清单与版本
+  - 驱动与过滤器挂载情况
+  - 检测面归属表
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct'
+    note: 查安全中心注册的产品；注意未注册的产品照样在跑，这份清单只是必要条件。
+  - cmd: 'fltmc filters'
+    note: 列文件系统微过滤驱动与高度，判断文件与注册表访问由谁接管、谁优先级更高。
+  - cmd: 'sc query type= driver state= all'
+    note: 列全部驱动服务；注意等号后必须有空格，这是该命令的固定写法。
+  pitfalls:
+  - 安全中心里没有不等于不存在，很多产品不注册或注册项被清理。
+  - 产品版本直接决定检测能力，拿不到版本号的结论都不可靠。
+  - 容器与云主机里防护常在宿主机侧，本机枚举结果会完全为空。
+
+- id: tech:telemetry-surface-mapping
+  name: 遥测面测绘
+  name_en: Telemetry Surface Mapping
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 把产品可能采集的事件类别（进程、映像、句柄、注册表、网络、脚本）逐类列出，标出触发条件与字段。难点是采集点随版本变化且大多不在公开文档里，只能靠驱动与日志实证。
+  difficulty: 3
+  prerequisites:
+  - tech:security-product-inventory
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 事件类别与触发条件表
+  - 字段可用性核对结果
+  - 文档缺口清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'logman query -ets'
+    note: 列已启用的跟踪会话，先看哪些采集通道真的开着，而不是按文档假设。
+  - cmd: 'wevtutil el'
+    note: 列全部事件通道；通道存在不代表有事件，也不代表产品在消费它。
+  - cmd: 'fltmc filters'
+    note: 从过滤器挂载情况反推文件与注册表访问是否被拦截记录。
+  pitfalls:
+  - 会话存在不代表事件被消费，记录与上报是两件事。
+  - 事件字段集合随版本变化，按旧版字段解析会静默丢数据而不是报错。
+  - 关掉日志通道不等于停止采集，内核缓冲仍可能被产品读取并上报。
+
+- id: tech:userland-hook-mapping
+  name: 用户态钩子测绘
+  name_en: Userland Hook Mapping
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 对比磁盘与内存中的系统库代码，定位被改写的函数入口与跳转补丁，判断哪些调用被接管。难点是版本差异与重定位造成的合法字节差异会大量误报，必须与同版本干净样本对照。
+  difficulty: 3
+  prerequisites:
+  - tech:telemetry-surface-mapping
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 被接管函数清单
+  - 补丁字节与跳转目标
+  - 误报排除依据
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: 'dumpbin /exports C:\Windows\System32\ntdll.dll'
+    note: 建立导出基线，确认要对照的函数确实由该模块导出，且没有转发到别处。
+  - cmd: 'pe-sieve64.exe /pid {{pid}}'
+    note: 扫进程模块与内存异常，缩到少数几个可疑模块再逐个手工比对。
+  - cmd: 'Get-FileHash -Algorithm SHA256 C:\Windows\System32\ntdll.dll'
+    note: 磁盘副本哈希作为基准，同名模块内存副本不一致时要先排除版本差异再下结论。
+  pitfalls:
+  - 只比函数首字节会把系统热补丁与编译器差异误判成钩子。
+  - 32 位进程加载的是另一套目录下的副本，路径不同，拿 64 位基线比会全错。
+  - 系统自带热补丁与安全产品的钩子在形态上高度相似，必须交叉验证。
+
+- id: tech:kernel-callback-blindspot
+  name: 内核回调盲区分析
+  name_en: Kernel Callback Blindspot Analysis
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 梳理产品依赖的内核通知回调类型与注册方式，判断哪些行为在回调视角下看不到或只能看到一部分。难点是回调项不导出、相关对象未文档化，注册顺序还决定谁先看到事件。
+  difficulty: 5
+  prerequisites:
+  - tech:security-product-inventory
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 回调类型与注册者清单
+  - 各类回调的可见范围边界
+  - 未被覆盖的行为点
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'driverquery /v /fo list'
+    note: 列驱动状态与文件路径，先认出哪些是产品的内核组件。
+  - cmd: 'fltmc instances'
+    note: 列过滤器实例与挂载卷，判断拦截覆盖的是全盘还是特定卷。
+  - cmd: 'bcdedit /enum {current}'
+    note: 查测试签名、调试与完整性相关开关，这些直接决定内核组件能否加载。
+  pitfalls:
+  - 回调注册顺序决定谁先看到事件，换一个加载顺序结论就变了。
+  - 部分回调只在特定对象类型上触发，按「全覆盖」假设会误判盲区。
+  - 内核态看不到的行为，用户态也可能看不到，两边都要实测。
+
+- id: tech:etw-ti-coverage-analysis
+  name: ETW-TI 覆盖分析
+  name_en: ETW-TI Coverage Analysis
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 分析内核威胁情报类提供者覆盖的事件（内存分配、映像加载、句柄操作），判断哪些操作必然留痕。难点是订阅需要高权限，事件量巨大且字段语义在版本之间会变化。
+  difficulty: 4
+  prerequisites:
+  - tech:telemetry-surface-mapping
+  artifacts:
+  - art:pe64
+  - art:driver
+  outputs:
+  - 事件类型与触发条件清单
+  - 必然留痕的操作集合
+  - 订阅权限与可用性结论
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'logman query providers | findstr /i "Threat-Intelligence"'
+    note: 确认该提供者在目标系统上是否存在及其 GUID，不存在就不必再往下查。
+  - cmd: 'logman query -ets'
+    note: 看有没有已启用的会话在订阅它；提供者存在但没人订阅时不会产生任何事件。
+  pitfalls:
+  - 提供者存在不代表默认会话会记录，没有订阅就没有事件。
+  - 订阅需要高权限，在被测环境中往往拿不到，结论只能标注为未验证。
+  - 多核下事件顺序可能倒序，按时间戳直接串因果会得到错误链条。
+
+- id: tech:amsi-scan-boundary
+  name: 脚本扫描边界
+  name_en: Script Scan Boundary Analysis
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 弄清脚本引擎与运行时在哪些时点把内容提交给扫描接口，哪些执行路径根本不经过它。难点是不同引擎与版本的调用点不同，且扫描结果存在缓存，重复提交不再触发。
+  difficulty: 3
+  prerequisites:
+  - tech:telemetry-surface-mapping
+  artifacts:
+  - art:script
+  - art:pe-dotnet
+  - art:pe64
+  outputs:
+  - 提交点清单与触发条件
+  - 不经过扫描的执行路径
+  - 缓存行为实测记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'Get-MpComputerStatus'
+    note: 查防护组件状态；实时防护关闭时扫描接口的行为与开启时完全不同，基线必须记录。
+  - cmd: 'wevtutil el | findstr /i "Defender"'
+    note: 找检测相关的事件通道，用日志确认某次提交到底有没有被扫描。
+  pitfalls:
+  - 扫描结果有缓存，第二次测试的行为会完全不同，容易得出反向结论。
+  - 不经过扫描接口的路径依然被行为监控覆盖，绕过扫描不等于绕过检测。
+  - 直接关掉扫描接口比任何正常脚本行为都显眼，收益与代价严重不对称。
+
+- id: tech:driver-and-memory-integrity-check
+  name: 驱动与内存完整性核查
+  name_en: Driver and Memory Integrity Check
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 评估目标环境的驱动签名强制、虚拟化安全与内存完整性策略，判断哪些需要内核态或可执行内存的手法在此环境不可用。难点是策略状态要从多个接口交叉确认，不同镜像默认值差异很大。
+  difficulty: 2
+  prerequisites:
+  - tech:security-product-inventory
+  artifacts:
+  - art:driver
+  - art:pe64
+  outputs:
+  - 策略状态与生效范围
+  - 不可用手法清单
+  - 交叉确认记录
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard'
+    note: 查虚拟化安全与内存完整性的运行状态，重点看是「已配置」还是「正在运行」。
+  - cmd: 'bcdedit /enum {current}'
+    note: 查启动配置里的测试签名与调试开关，这些开关决定未签名内核组件能否加载。
+  - cmd: 'Get-ProcessMitigation -System'
+    note: 查系统级漏洞缓解默认值，判断目标进程会不会被强制加上控制流保护。
+  pitfalls:
+  - 内存完整性开启时未签名驱动无法加载，但界面上常显示为「已开启未重启」这类中间态。
+  - 本地读数可能被组策略覆盖，配置值与实际生效值必须分开记录。
+  - 开启了内存完整性的环境里，可执行内存的分配行为与普通环境差别很大。
+
+- id: tech:detection-rule-differential
+  name: 检测规则差分
+  name_en: Detection Rule Differential
+  domain:
+  - dom:av-evasion-edr
+  parent: dom:av-evasion-edr
+  def: 用公开规则集与多引擎结论做差分，逐步收窄到命中的具体字节、字符串或结构特征。难点是引擎只回结论不回证据，收敛只能靠单变量改动与重复扫描，改动之间还会相互影响。
+  difficulty: 3
+  prerequisites:
+  - tech:static-detection-surface-recon
+  - tech:telemetry-surface-mapping
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  - art:script
+  outputs:
+  - 命中的规则与偏移
+  - 单变量改动与结论对应表
+  - 收敛后的最小特征集
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: 'yara -r {{out}} {{binary}}'
+    note: 让 {{out}} 指向本地规则目录，逐条命中能定位到具体规则族与偏移。
+  - cmd: 'capa -v {{binary}}'
+    note: 看能力匹配的详细命中位置，判断命中的是导入、字符串还是指令组合。
+  - cmd: 'sigcheck -a -h -nobanner {{binary}}'
+    note: 每次改动后重算哈希与签名状态，避免把改动带来的签名失效误当成检测变化。
+  pitfalls:
+  - 一次改多个点会导致结论无法归因，必须保持单变量。
+  - 规则集版本不同结论就不同，比较前先固定规则集版本。
+  - 多引擎的「未检出」只说明当时没命中，不代表该特征没被记录。
+
+# ---------------------------------------------------------------------------
+# dom:av-evasion-sandbox —— 沙箱与环境对抗（8 条）
+# ---------------------------------------------------------------------------
+
+- id: tech:virtualization-artifact-detection
+  name: 虚拟化痕迹识别
+  name_en: Virtualization Artifact Detection
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 从设备型号、驱动、服务与固件信息判断当前是否运行在虚拟化或分析环境中。难点是同样的判据在云主机与低配真机上同样成立，误判会直接让样本在真实目标上失效。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  outputs:
+  - 虚拟化特征命中清单
+  - 各判据的误判率估计
+  - 判据组合与阈值
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: 'systeminfo'
+    note: 一次看到系统型号、厂商、固件与内存，是判据里最基础的三个字段。
+  - cmd: 'Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model'
+    note: 取厂商与型号字符串做精确匹配，比模糊匹配关键词误报低。
+  - cmd: 'reg query "HKLM\SOFTWARE\VMware, Inc.\VMware Tools"'
+    note: 查虚拟化工具组件是否安装；键不存在只说明未装工具，不代表不是虚拟机。
+  pitfalls:
+  - 云主机与虚拟化分析环境的特征高度重叠，按厂商名判定会大面积误伤。
+  - 只查一个字符串极易被正常机器命中，判据必须组合使用。
+  - 判据堆得越多，可用性越差，最后在任何机器上都拒绝执行。
+
+- id: tech:hardware-fingerprint-check
+  name: 硬件指纹校验
+  name_en: Hardware Fingerprint Check
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 读取处理器标识、磁盘序列号、显示适配器与内存容量，判断硬件是否为虚拟化设备或规格明显偏低。难点是虚拟机可以伪造大部分字段，云环境的硬件描述与真机差别很小。
+  difficulty: 2
+  prerequisites:
+  - tech:virtualization-artifact-detection
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 硬件字段快照
+  - 与常见虚拟化默认值的比对结果
+  - 规格异常的置信度评估
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: 'wmic cpu get ProcessorId'
+    note: 取处理器标识；注意新版系统上 wmic 可能默认不存在，需改用 CIM 查询。
+  - cmd: 'wmic diskdrive get SerialNumber,Model'
+    note: 取磁盘序列号与型号，虚拟磁盘常返回全零或固定占位串。
+  - cmd: 'Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM'
+    note: 虚拟机的显示适配器名称与显存值往往落在很窄的几个取值上。
+  pitfalls:
+  - 序列号可被虚拟化层伪装成任意值，按「有没有序列号」判断并不可靠。
+  - 核数与内存偏低同样会命中真实的老旧办公机，这是最大的误报来源。
+  - 部分字段需要管理员权限才能读，权限不足时的空值不能当成特征。
+
+- id: tech:network-environment-check
+  name: 网络环境验证
+  name_en: Network Environment Validation
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 检查出口地址、DNS 解析结果、代理设置与连通性，判断网络是否被整体重定向或仿真。难点是仿真的网络越来越完整，单一判据不可靠，而多判据又会增加失败面。
+  difficulty: 2
+  prerequisites:
+  - tech:virtualization-artifact-detection
+  artifacts:
+  - art:pcap
+  - art:pe32
+  outputs:
+  - 出口与解析结果快照
+  - 代理与连通性状态
+  - 仿真网络特征命中情况
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: 'ipconfig /all'
+    note: 看网卡型号、网关与 DNS 配置；仿真网络的网关与 DNS 常指向固定内网段。
+  - cmd: 'Get-DnsClientServerAddress'
+    note: 取按接口组织的 DNS 服务器列表，比解析结果更早暴露被统一接管。
+  - cmd: 'Test-NetConnection -ComputerName example.com -Port 443'
+    note: 测一次完整外联；只测 DNS 或只测 ICMP 都无法区分「解析被劫持」与「出网被封」。
+  pitfalls:
+  - 断网环境不等于沙箱，大量真实终端本来就不通外网。
+  - DNS 被劫持到固定地址反而是最容易识别的特征，但需要多次解析比对。
+  - 代理来自组策略时本地读数正常，实际流量仍被转发，要看真实对端。
+
+- id: tech:uptime-and-timing-check
+  name: 运行时长与时序校验
+  name_en: Uptime and Timing Check
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 用系统启动时长、指令计数差与被快进的延时判断执行环境是否被加速或是刚启动。难点是真机也会休眠与挂起，阈值定得越紧，误判概率越高。
+  difficulty: 2
+  prerequisites:
+  - tech:virtualization-artifact-detection
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 启动时长与延时实测值
+  - 加速判定阈值建议
+  - 误判场景清单
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: 'systeminfo'
+    note: 输出里带系统启动时间，配合当前时间可直接算出运行时长。
+  - cmd: 'Get-CimInstance Win32_OperatingSystem | Select-Object LastBootUpTime'
+    note: 取结构化的启动时间字段，比解析文本输出稳定。
+  - cmd: 'Measure-Command { Start-Sleep -Milliseconds 1000 }'
+    note: 实测一秒睡眠的真实耗时，明显偏短说明存在时间加速或时钟被篡改。
+  pitfalls:
+  - 休眠与快照恢复都会让开机时长异常，不能单独作为判定依据。
+  - 虚拟化层的时间同步会把时钟拉回，时间差可能为负。
+  - 阈值写成硬编码，在慢速真机上必然误判，需要自适应基准。
+
+- id: tech:analysis-tool-trace-detection
+  name: 分析工具痕迹识别
+  name_en: Analysis Tool Trace Detection
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 枚举进程、窗口、服务与监听端口，识别调试器、监控器、抓包与自动化工具的存在。难点是通用枚举本身就要调用高危接口，频繁枚举反而比工具痕迹更可疑。
+  difficulty: 2
+  prerequisites:
+  - tech:virtualization-artifact-detection
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 可疑进程与端口清单
+  - 枚举动作自身的可观测事件
+  - 判据优先级建议
+  cost: low
+  false_positive_risk: high
+  commands:
+  - cmd: 'Get-Process | Select-Object Name,Id'
+    note: 取进程名与 PID 做匹配；按名字匹配会被改名绕过，也会误伤同名正常程序。
+  - cmd: 'tasklist /m'
+    note: 列出进程加载的模块，监控类工具常带特征明显的注入模块。
+  - cmd: 'Get-NetTCPConnection | Select-Object LocalPort,State,OwningProcess'
+    note: 看监听端口与所属进程，抓包与调试服务往往有固定端口。
+  pitfalls:
+  - 按进程名匹配会被改名绕过，也会误伤同名的正常程序。
+  - 遍历模块列表在受保护进程上会失败，失败本身也能被当作特征。
+  - 枚举的频次与时机比枚举内容更容易被关联，短时间多次全量枚举非常突出。
+
+- id: tech:user-interaction-gating
+  name: 交互门槛设计
+  name_en: User Interaction Gating
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 要求外部交互信号（可见窗口、鼠标移动、前台焦点）满足后才继续，让无人值守的分析停在无害分支。难点是分析平台已能模拟交互，而门槛本身又是所有手法里最显眼的可疑特征。
+  difficulty: 3
+  prerequisites:
+  - tech:analysis-tool-trace-detection
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:script
+  outputs:
+  - 交互判据与阈值
+  - 无人值守环境下的停留行为
+  - 门槛本身的静态特征
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'Get-Process | Where-Object MainWindowTitle'
+    note: 筛出有可见窗口标题的进程，用来判断当前是否处在有桌面交互的会话里。
+  - cmd: 'query session'
+    note: 列会话状态；只有交互式会话存在时，鼠标与焦点类判据才有意义。
+  - cmd: 'Get-CimInstance Win32_Process | Select-Object ProcessId,Name'
+    note: 取进程快照用于前后比对，判断交互期间是否有新进程被拉起。
+  pitfalls:
+  - 自动分析平台普遍能模拟鼠标与窗口焦点，单纯等点击拦不住。
+  - 仅在交互后执行会让静态结论与动态结论完全脱节，反而更可疑。
+  - 门槛条件写成明文比较，最容易被静态规则直接抓住。
+
+- id: tech:execution-delay-budget
+  name: 执行延迟预算
+  name_en: Execution Delay Budget
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 用长延时或外部条件把主体执行推到分析窗口之外，同时控制延迟幅度不至于过分离谱。难点是长时间静默与定时唤醒本身就是沙箱的重点标记对象，延迟越长暴露面越大。
+  difficulty: 2
+  prerequisites:
+  - tech:uptime-and-timing-check
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:shellcode
+  outputs:
+  - 延迟策略与总耗时
+  - 唤醒方式与可观测事件
+  - 真实机器上的可接受度评估
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'Measure-Command { Start-Process -FilePath {{binary}} -Wait }'
+    note: 测端到端耗时，确认延迟叠加后仍在真实用户能接受的范围。
+  - cmd: 'Get-Date'
+    note: 记录起止时刻，用外部时间戳复核进程内部自算的延迟是否一致。
+  pitfalls:
+  - 定时器在睡眠与挂起期间不推进，唤醒时刻与预期差很远。
+  - 延时期间进程常驻，反而给采集器更多采样机会，静默不等于隐身。
+  - 分析窗口通常远长于常见延时，单靠延时很少能真正跨过去。
+
+- id: tech:environment-fingerprint-cleaning
+  name: 实验环境指纹清洗
+  name_en: Lab Environment Fingerprint Cleaning
+  domain:
+  - dom:av-evasion-sandbox
+  parent: dom:av-evasion-sandbox
+  def: 在自有实验机上移除虚拟化工具的痕迹与常见分析软件残留，避免验证手法时被环境判定提前拦下。难点是清洗不彻底会留下更强特征（缺失的设备、异常驱动），虚拟化层也无法真正抹掉。
+  difficulty: 2
+  prerequisites:
+  - tech:virtualization-artifact-detection
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 清洗项清单与执行顺序
+  - 清洗后残留特征评估
+  - 环境差异说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'Get-Service | Where-Object Name -like "*VM*"'
+    note: 列出虚拟化相关服务，作为清洗项的第一版清单。
+  - cmd: 'reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" /s /f "VMware"'
+    note: 递归搜卸载项里的厂商关键字，找残留的驱动与工具安装记录。
+  - cmd: 'Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model'
+    note: 清洗后复测厂商与型号，确认改动真的生效而不是只删了注册表项。
+  pitfalls:
+  - 删掉驱动会让依赖它的设备变成未知设备，异常比原来更明显。
+  - 只改注册表不动驱动等于没改，读数与实际行为会对不上。
+  - 清洗后的环境与真实目标仍有底层差异，任何结论都要标注环境来源。

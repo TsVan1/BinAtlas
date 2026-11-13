@@ -1,6 +1,5 @@
 # BinAtlas 知识库 · 载体
 # 规范：03-DATA-SCHEMA.md §2.5（kind 枚举已收编，不得自造）
-# 本批 19 条，覆盖试点技术实际引用的全部载体
 
 - id: art:pe32
   name: PE32 可执行文件
@@ -79,3 +78,11 @@
   name: Shellcode
   kind: shellcode
   def: 无文件格式的位置无关机器码，没有导入表也没有节区，靠加载器自行解析 API。静态分析要手工重建 API 解析逻辑，动态分析则需先给它造一个可执行的宿主。
+- id: art:driver
+  name: Windows 内核驱动
+  kind: kernel-object
+  def: .sys 驱动模块，运行在 Ring0，可访问内核结构与回调，是内核攻防的主战场。
+- id: art:kernel-module
+  name: Linux 内核模块
+  kind: kernel-object
+  def: .ko 内核模块，可加载进内核空间，常用于 LKM Rootkit 与内核漏洞验证。

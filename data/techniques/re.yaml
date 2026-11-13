@@ -1,0 +1,1735 @@
+# BinAtlas 知识库 · 技术（逆向工程技术领域）
+# 规范：03-DATA-SCHEMA.md §2.2
+# 覆盖 dom:re 的 6 个子领域：re-static / re-decompile / re-dynamic / re-unpacking / re-lang / re-protocol
+# 每个子领域 8 条，合计 48 条。
+#
+# 口径说明：
+#   1. def / name 内不写具体工具名；工具只出现在 commands 的 cmd 里（§2.2 注释）。
+#   2. commands 占位符固定用 {{binary}} / {{apk}} / {{pid}} / {{out}}，不绑定具体样本文件名；
+#      承载 art:pcap 的条目另用 {{pcap}}（§2.2 允许 {{binary}}/{{firmware}} 这类占位符）。
+#   3. prerequisites 只引用已存在的节点（本文件或 data/techniques.yaml 的既有 id）。
+#   4. 不写可直接武器化的完整利用链；条目只描述分析方法与还原目标。
+
+# ============================================================
+# dom:re-static · 静态分析
+# ============================================================
+
+- id: tech:binary-triage-metadata
+  name: 二进制元信息研判
+  name_en: Binary Triage & Metadata Review
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 读头部、节区、加载命令与依赖表，先判断架构、位数、链接方式与保护项，再决定后续路线。难点是加壳或篡改头部后元信息会主动骗人，必须交叉核验。
+  difficulty: 2
+  prerequisites: []
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  outputs:
+  - 架构位数与链接方式结论
+  - 保护机制清单
+  - 值得深挖的节区与导入表
+  - 后续分析路线建议
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'file {{binary}}'
+    note: 先拿架构与位数；被混淆的样本会在此处给出误导性的可执行类型说明
+  - cmd: 'readelf -h -l {{binary}}'
+    note: ELF 侧看入口、程序头与段权限；PIE 与 RELRO 状态在这里能直接读到
+  - cmd: 'rabin2 -I {{binary}}'
+    note: 一次取架构位数、加固项与签名信息，PE/ELF/Mach-O 通用
+  - cmd: 'python3 -c "import pefile,sys; pe=pefile.PE(sys.argv[1]); [print(s.Name, round(float(s.get_entropy()),2)) for s in pe.sections]" {{binary}}'
+    note: 按节区熵筛可疑区段；PE 专用，ELF 侧只能靠经验比对
+  pitfalls:
+  - 节区名可被伪造，把高熵代码段命名为 .rdata 就能骗过按名字判断的人
+  - 32 位与 64 位混判会让后续所有地址计算偏移，PE32+ 的可选头大小不同，别照搬 32 位经验
+  - 带合法签名的程序也可能含高熵段，熵高不必然等于加壳
+  - 剥离符号不等于加壳，strip 之后动态符号表通常仍可用
+
+- id: tech:disassembly
+  name: 反汇编
+  name_en: Disassembly
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 把机器码还原为汇编指令并划分指令与数据边界，是所有静态工作的地基。难点是代码与数据混排、变长指令与花指令会让线性扫描错位，凭空生成假指令。
+  difficulty: 3
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  - art:shellcode
+  outputs:
+  - 带指令与数据判定的汇编清单
+  - 花指令与错位位置标注
+  - 可复现的段映射与加载基址
+  - 从真实入口重扫的结果
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 线性扫描的基线输出；含嵌入数据时会出现假指令，只作参照
+  - cmd: 'r2 -q -c "aa; afl" {{binary}}'
+    note: 递归下降加函数级切分，比线性扫描更贴近真实边界
+  - cmd: 'radare2 -q -c "pd 40 @ entry0" {{binary}}'
+    note: 从入口反汇编固定条数，用于人工确认入口处的解壳桩形态
+  pitfalls:
+  - 线性扫描会把嵌入数据当指令解，多出来的指令不是函数体，别直接采信
+  - x86 变长指令从错误偏移起步会连锁错位，必须从真实入口或调用点重扫
+  - 反汇编给出的是虚拟地址，与文件偏移不是一回事，对齐换算后才对得上
+  - ARM 与 MIPS 需显式指定指令集与字节序，选错时输出全错且不会报错
+
+- id: tech:function-boundary-identification
+  name: 函数边界识别
+  name_en: Function Boundary Identification
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 判定哪些字节属于同一函数，在符号被剥离后尤其关键。难点是尾调用、内联、热冷分区与跳板会让边界不再连续，单靠调用图必然漏函数。
+  difficulty: 3
+  prerequisites:
+  - tech:disassembly
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:so
+  outputs:
+  - 函数起止地址表
+  - 函数调用关系图
+  - 内联与尾调用候选点
+  - 无法归属的代码区间清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'r2 -q -c "aa; afl" {{binary}}'
+    note: 先拿一版递归下降的函数表，作为人工校正的起点
+  - cmd: 'objdump -d {{binary}} | grep -n "endbr64" | head -40'
+    note: 存在 CET 标记时 endbr64 常落在函数入口，可作边界校验锚点
+  - cmd: 'nm -D {{binary}}'
+    note: 动态符号仍能给出部分真实入口，用来校正猜测出的边界
+  pitfalls:
+  - 尾调用以 jmp 转出，按返回指令切分会把两个函数并成一个
+  - 编译器把冷代码拆到独立节区后，同一函数的片段在文件里并不相邻
+  - 相邻函数共用一段收尾代码是链接器合并的结果，按 ret 切分必然出错
+  - 无符号时没有可信的入口集合，只能靠异常表与调用点推断，必须承认存在不确定区间
+
+- id: tech:xref-symbol-recovery
+  name: 交叉引用与符号还原
+  name_en: Cross-Reference & Symbol Recovery
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 建立代码到数据、代码到代码的引用关系，为匿名函数与全局对象命名。难点是无符号时引用只能靠指令语义推断，间接寻址与表驱动会让引用链断开。
+  difficulty: 3
+  prerequisites:
+  - tech:function-boundary-identification
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:apk
+  outputs:
+  - 交叉引用表
+  - 匿名函数与全局变量的命名建议
+  - 关键数据结构推断草稿
+  - 字符串到代码的引用路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'r2 -q -c "aaa; axt @ sym.main" {{binary}}'
+    note: 查某地址被谁引用；aaa 会把数据引用一并分析
+  - cmd: 'rabin2 -zz {{binary}}'
+    note: 列出字符串及其地址与引用线索，是给匿名函数命名最省力的入口
+  - cmd: 'objdump -T {{binary}}'
+    note: 动态符号表保留导入名，可反推被调用的外部函数
+  pitfalls:
+  - 字符串引用常指向拼接后的中间缓冲区，看到常量不代表逻辑在那里
+  - 函数表与虚表里的引用在静态视图里表现为数据，xref 查不出来
+  - 位置无关代码的引用经 GOT 中转，直接读指令立即数会得到错误目标
+  - 同名导入符号在 PLT 里被多个调用点共用，不代表调用语义相同
+
+- id: tech:stack-frame-recovery
+  name: 栈帧与局部变量布局
+  name_en: Stack Frame & Local Variable Recovery
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 还原参数、局部变量与返回地址在栈上的布局。难点是优化后不再保留帧指针，变量被寄存器瓜分，栈上只剩溢出临时区，偏移与变量不再一一对应。
+  difficulty: 4
+  prerequisites:
+  - tech:function-boundary-identification
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  outputs:
+  - 栈帧布局与参数位置表
+  - 局部变量的宽度与生命周期
+  - 缓冲区对象大小推断
+  - 与调试器实测结果的核对记录
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'gdb -q -batch -ex "disassemble /r main" {{binary}}'
+    note: 带原始字节看入口与收尾代码，确认是否省略帧指针
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 核对栈指针的成对调整，定位栈溢出临时区的大小
+  - cmd: 'readelf --debug-dump=frames {{binary}}'
+    note: 有异常帧信息时可直接拿栈展开数据，比手工推更可靠
+  pitfalls:
+  - 省略帧指针的构建里该寄存器已被当通用寄存器用，按标准序言找变量必然错
+  - 栈上一个偏移可能对应结构体整体，相邻两个偏移未必是两个独立变量
+  - 64 位 Windows 的调用影子空间会被误认成局部变量，它实际属于被调函数
+  - 编译器复用栈槽给生命周期不重叠的变量，一个偏移可能对应多个逻辑变量
+
+- id: tech:control-flow-graph-recovery
+  name: 控制流图重建
+  name_en: Control Flow Graph Recovery
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 把指令序列重建为基本块与有向边，还原分支与循环结构。难点是间接跳转与跳转表在静态下无法穷举目标，目标缺失会让图结构性断裂。
+  difficulty: 4
+  prerequisites:
+  - tech:function-boundary-identification
+  - tech:disassembly
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:elf32
+  outputs:
+  - 基本块与边列表
+  - 间接跳转目标候选集
+  - 循环与异常出口标注
+  - 不可达块清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'radare2 -q -c "aaa; agfj @ sym.main" {{binary}}'
+    note: 输出函数级控制流图的 JSON，便于脚本统计基本块与边
+  - cmd: 'r2 -q -c "aaa; pdf @ sym.main" {{binary}}'
+    note: 带分支标注的反汇编视图，人工核对间接跳转处的目标推测
+  - cmd: 'objdump -d {{binary}} | grep -cE "^\s+[0-9a-f]+:"'
+    note: 粗算指令规模，用于估算图的复杂度与后续分析代价
+  pitfalls:
+  - 跳转表目标只存在于数据段，边界算错就会把目标解析到相邻数据上
+  - 异常与信号处理路径也是控制流的一部分，只建正常路径会漏掉整类边
+  - 寄存器与内存间接跳转在静态下无法完全解析，图不闭合应标注为不确定边
+  - 混淆器插入的垃圾块与永不执行块会让图虚胖，块数多不代表逻辑复杂
+
+- id: tech:static-data-flow-analysis
+  name: 静态数据流分析
+  name_en: Static Data Flow Analysis
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 沿定义使用链追踪数据的来源与去向，判定某个值是否受外部输入影响。难点是别名、指针传递与跨函数传播让事实集迅速膨胀，精度与收敛性必须取舍。
+  difficulty: 4
+  prerequisites:
+  - tech:control-flow-graph-recovery
+  - tech:xref-symbol-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:jar
+  outputs:
+  - 定义使用链
+  - 污点传播路径
+  - 别名与指针目标集合
+  - 分析不收敛的代码区域标注
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'python3 -c "import angr,sys; p=angr.Project(sys.argv[1], auto_load_libs=False); print(p.arch, hex(p.entry))" {{binary}}'
+    note: 载入分析框架做符号化数据流；先确认架构与入口解析正确
+  - cmd: 'r2 -q -c "aaa; afvd @ sym.main" {{binary}}'
+    note: 列出函数内变量与访问位置，作为手工构建定义使用链的底稿
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 工具结论有疑问时回落到指令层核对寄存器级传播
+  pitfalls:
+  - 过程间分析在递归与虚调用处容易发散，必须设深度上限，否则跑不完
+  - 把受输入影响直接等同于可利用，是从数据流跳到结论的典型越界
+  - 优化后的寄存器复用会制造假依赖，同一个寄存器不等于同一个变量
+  - 关闭外部库加载会切断跨库数据流，结论只在闭包内成立
+
+- id: tech:compiler-provenance-identification
+  name: 编译器与优化级别识别
+  name_en: Compiler Provenance Identification
+  domain:
+  - dom:re-static
+  parent: dom:re-static
+  def: 从启动代码、库函数特征与代码生成风格判断编译器族与优化档位，据此预判语义被改写的程度。难点是定制工具链与多语言混编会模糊这些特征。
+  difficulty: 3
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:so
+  outputs:
+  - 编译器族与版本区间推断
+  - 优化档位判断
+  - 可预期的语义改写清单
+  - 需重点核对的代码区域
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'strings -a {{binary}} | grep -iE "GCC:|clang version|Microsoft|Go build"'
+    note: 版本字符串是最直接的证据，但可能被剥离或加密
+  - cmd: 'readelf -p .comment {{binary}}'
+    note: ELF 常保留编译器版本注释；被 strip 或二次处理后为空
+  - cmd: 'nm -C {{binary}} | head -50'
+    note: 看符号修饰风格与内联库函数是否独立成符号，可反推工具链
+  pitfalls:
+  - 版本字符串可以被伪造或整体剥离，缺证据时只能给区间结论
+  - 交叉编译产物会带宿主工具链痕迹，与实际运行平台无关
+  - 静态链接的第三方库保留其原始编译特征，别算到主程序头上
+  - 同一编译器不同优化档位的代码风格差异很大，一句话概括整个样本必错
+
+# ============================================================
+# dom:re-decompile · 反编译与伪代码还原
+# ============================================================
+
+- id: tech:decompiler-output-validation
+  name: 反编译结果可信度校验
+  name_en: Decompiler Output Validation
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 把伪代码当假设而非事实，逐条用汇编、运行数据与行为回证。难点是反编译器会为对齐而虚构类型与参数，错误输出看起来同样自洽。
+  difficulty: 3
+  prerequisites:
+  - tech:function-boundary-identification
+  - tech:compiler-provenance-identification
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:pe-dotnet
+  outputs:
+  - 待验证假设清单
+  - 伪代码与汇编的差异点
+  - 已回证与已推翻的结论表
+  - 结论可信度分级
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: 'radare2 -q -c "aaa; pdc @ sym.main" {{binary}}'
+    note: 换另一套反编译器交叉对比同一函数，不一致处就是必须回证的疑点
+  - cmd: 'objdump -d {{binary}}'
+    note: 伪代码与指令对不上时，以指令为准重读该段
+  - cmd: 'r2 -q -c "aaa; pdf @ sym.main" {{binary}}'
+    note: 反汇编视图保留真实宽度与偏移，用来核对伪代码推断的类型宽度
+  pitfalls:
+  - 反编译器的类型是推断出来的，指针与整数可互换显示，别拿类型当真
+  - 两套反编译器结论一致也可能同错，一致性不等于正确性
+  - 优化后的伪代码会把两个分支合成一行三元表达式，看起来像单一逻辑
+  - 变量名是自动生成，不能作为语义依据
+
+- id: tech:calling-convention-recovery
+  name: 调用约定与参数还原
+  name_en: Calling Convention Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 由调用点与被调点的寄存器与栈使用反推参数顺序、个数与返回值位置。难点是同一函数可能被不同约定调用，可变参数又让参数个数不固定。
+  difficulty: 3
+  prerequisites:
+  - tech:decompiler-output-validation
+  - tech:stack-frame-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:elf32
+  - art:mach-o
+  outputs:
+  - 函数签名与参数顺序
+  - 返回值与寄存器占用约定
+  - 可变参数函数识别结论
+  - 调用点与被调点不一致的问题清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 看调用前后寄存器装载与栈清理方向，判断约定与参数个数
+  - cmd: 'gdb -q -batch -ex "break *main" -ex "run" -ex "info registers rdi rsi rdx" {{binary}}'
+    note: 在真实调用点读参数寄存器，比静态猜更可靠
+  - cmd: 'r2 -q -c "aaa; afcf @ sym.imp.printf" {{binary}}'
+    note: 让工具推断某函数的调用约定作为参照，仍需人工核对
+  pitfalls:
+  - 64 位 Windows 的前四参数走寄存器且调用者分配影子空间，容易把影子空间数成参数
+  - 可变参数函数用寄存器传向量参数个数，忽略这点会少读参数
+  - 尾调用优化后调用点消失，按调用点统计参数会得到空集
+  - 32 位约定里栈清理方不同，混判会让所有栈偏移错位
+
+- id: tech:type-and-struct-recovery
+  name: 类型与结构体还原
+  name_en: Type & Struct Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 由访问偏移与宽度推断聚合类型，重建结构体成员布局。难点是填充字节与柔性数组无法被直接观测，同一偏移在不同路径下形态还可能不一致。
+  difficulty: 4
+  prerequisites:
+  - tech:stack-frame-recovery
+  - tech:calling-convention-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:pe-dotnet
+  outputs:
+  - 结构体成员偏移与宽度表
+  - 填充与对齐推断
+  - 聚合类型的使用点清单
+  - 类型不确定项标记
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'r2 -q -c "aaa; aft @ sym.main" {{binary}}'
+    note: 输出工具推断的类型与结构，作为初稿再逐项人工校正
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 逐个核对访存宽度与固定偏移，宽度错一位结论就全变
+  - cmd: 'gdb -q -batch -ex "ptype struct" {{binary}}'
+    note: 有调试信息时直接拿真实类型对照，无符号则跳过
+  pitfalls:
+  - 用 4 字节读一个 8 字节字段的一半是常见误判，必须看完整访存序列
+  - 结构体数组会被误认成结构体内的重复成员，步长是判别关键
+  - 对齐填充不产生访存，永远看不到，只能按 ABI 规则补而不是按没访问就没有
+  - 同一偏移在不同分支被解释成不同类型，可能是联合体或类型混淆，别强行统一
+
+- id: tech:cxx-vtable-recovery
+  name: C++ 虚表与虚调用还原
+  name_en: C++ Vtable & Virtual Call Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 定位虚表指针、还原虚函数顺序与继承层次，把间接调用还原成具体目标。难点是多继承与虚继承下虚表被拆成多段并附带偏移修正。
+  difficulty: 4
+  prerequisites:
+  - tech:type-and-struct-recovery
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  - art:mach-o
+  outputs:
+  - 虚表到函数的映射表
+  - 类继承层次推断
+  - 间接调用点的候选目标集
+  - 多继承偏移修正说明
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'readelf -S {{binary}}'
+    note: 先找只读数据段，虚表通常成组落在那里
+  - cmd: 'objdump -s -j .rodata {{binary}}'
+    note: 直接看只读数据里的函数指针序列，识别连续的虚表块
+  - cmd: 'r2 -q -c "aaa; axt @ 0x0" {{binary}}'
+    note: 反查引用虚表地址的构造点，构造函数里的写入可确认虚表归属
+  pitfalls:
+  - 多继承下第二条基类虚表前带指针偏移修正，按单一虚表还原会整体错位
+  - 虚表首项常与析构或运行时信息相关，从第一项起算函数索引会偏移
+  - 构造与析构过程中虚表指针会被改写，运行期读到的未必是最终虚表
+  - 内联后虚调用可能被去虚拟化，看到直接调用不等于没有虚函数
+
+- id: tech:template-and-stl-recognition
+  name: 模板与容器特征识别
+  name_en: Template & Container Recognition
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 识别被展开成内联代码的标准库模板实例，把裸内存操作还原成容器语义。难点是实例化后类型信息全丢，只能靠分配、扩容与迭代模式辨认。
+  difficulty: 4
+  prerequisites:
+  - tech:type-and-struct-recovery
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  - art:elf32
+  outputs:
+  - 容器类型与元素类型推断
+  - 迭代器与扩容逻辑标注
+  - 模板实例与源码形态对照
+  - 误判风险说明
+  cost: high
+  false_positive_risk: high
+  commands:
+  - cmd: 'nm -C {{binary}} | grep -Ei "std::|basic_string|vector"'
+    note: 未被完全内联的实例会带修饰名出现，先拿确凿的容器清单
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 核对三指针布局与容量倍增逻辑，这是容器最稳定的形态特征
+  - cmd: 'strings -a {{binary}} | grep -Ei "basic_string|length_error"'
+    note: 异常消息与类型名残留可佐证模板实例存在
+  pitfalls:
+  - 三指针布局也出现在手写动态数组上，仅凭布局认定标准容器会误判
+  - 短字符串优化让小块字符串不出现在堆上，按一定分配过去推必漏
+  - 不同标准库实现布局不同，跨平台套用同一结论会错
+  - 内联后容器操作与业务逻辑混杂，边界靠猜，必须标注为高不确定
+
+- id: tech:control-flow-structuring
+  name: 控制流结构化折叠
+  name_en: Control Flow Structuring
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 把基本块图折叠成条件与循环等高级结构，恢复可读的控制逻辑。难点是不可归约图与混淆产生的多入口区域无法用单层结构表达。
+  difficulty: 4
+  prerequisites:
+  - tech:control-flow-graph-recovery
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:pe-dotnet
+  outputs:
+  - 结构化后的伪代码
+  - 无法结构化的区块清单
+  - 循环类型与退出条件
+  - 与原始控制流图的一致性核对
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'radare2 -q -c "aaa; pdc @ sym.main" {{binary}}'
+    note: 拿一版结构化输出，重点看它把哪些区域退化成无条件跳转
+  - cmd: 'r2 -q -c "aaa; agfj @ sym.main" {{binary}}'
+    note: 与控制流图对照，跳转密集处往往就是不可归约区
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 对折叠结果有疑问时回落指令层确认跳转方向
+  pitfalls:
+  - 控制流平坦化的分发循环折叠后看起来像多分支语句，认错会让整段语义全错
+  - 不可归约图强行结构化会产生语法通过但语义不等价的伪代码
+  - 编译器做的循环旋转会多出一个前置判断，不代表源码里是两个分支
+  - 结构化工具对间接跳转的保守处理会凭空插入跳转标签，块越多越明显
+
+- id: tech:exception-recovery
+  name: 异常处理结构还原
+  name_en: Exception Handling Recovery
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 还原捕获与清理路径：定位异常表、识别落地块与栈展开逻辑。难点是异常表在部分二进制里被剥离，只剩调用约定与清理代码可循。
+  difficulty: 4
+  prerequisites:
+  - tech:control-flow-structuring
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:so
+  outputs:
+  - 异常处理表与捕获范围
+  - 清理路径与析构调用点
+  - 异常类型到处理块的映射
+  - 表缺失时的替代判据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'readelf --debug-dump=frames {{binary}}'
+    note: 从异常帧信息拿栈展开规则，异常路径多半与之一致
+  - cmd: 'objdump -d {{binary}} | grep -nE "__cxa_(throw|begin_catch|end_catch)"'
+    note: 运行时调用点是异常块最硬的证据，比猜控制流可靠
+  - cmd: 'r2 -q -c "aaa; afl~personality" {{binary}}'
+    note: 查个性化处理函数相关符号，辅助定位异常表
+  pitfalls:
+  - 异常表被剥离后，没有异常与表被删除这两件事无法从静态区分
+  - 析构清理路径与正常返回路径共享尾部代码，按单一出口统计会漏路径
+  - 是否生成展开表受编译选项影响，同一源码不同选项结果不同
+  - 多个捕获块按顺序匹配，静态看到的顺序未必是生效顺序
+
+- id: tech:inline-and-tailcall-recognition
+  name: 内联与尾调用识别
+  name_en: Inline & Tail Call Recognition
+  domain:
+  - dom:re-decompile
+  parent: dom:re-decompile
+  def: 辨认被展开进调用者的函数体与被改写成跳转的尾调用，还原真实调用关系。难点是内联后原函数可能完全消失，调用图直接缺节点。
+  difficulty: 4
+  prerequisites:
+  - tech:function-boundary-identification
+  - tech:control-flow-structuring
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:mach-o
+  outputs:
+  - 内联点与推断的被内联函数
+  - 修正后的调用关系图
+  - 疑似消失的函数清单
+  - 与符号表的对照结果
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'nm -C {{binary}}'
+    note: 被完全内联的函数不留符号，符号缺失与调用图缺失交叉验证才构成证据
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 尾调用表现为先清栈再跳转，与普通调用后返回的形态不同
+  - cmd: 'r2 -q -c "aaa; afo @ sym.main" {{binary}}'
+    note: 看工具列出的调用与跳转关系，其中相当一部分跳转是尾调用
+  pitfalls:
+  - 把尾调用当成独立函数入口，会给调用图补出一条并不存在的边
+  - 内联后同一段代码在多个调用点重复出现，按地址聚类会误判成多个函数
+  - 静态链接的小函数大量内联，符号表为空不代表这些逻辑不存在
+  - 尾调用与普通跳转在指令层完全一样，只能靠上下文区分
+
+# ============================================================
+# dom:re-dynamic · 动态调试分析
+# ============================================================
+
+- id: tech:debugger-attach-and-breakpoint
+  name: 调试器附加与断点布置
+  name_en: Debugger Attach & Breakpoint Placement
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 附加到目标进程并在关键位置暂停，观察寄存器与内存的真实状态。难点是附加行为本身可被探测，且断点改变时序会让依赖时间的逻辑走偏。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:so
+  outputs:
+  - 可控的暂停点与执行流
+  - 断点处的寄存器与栈快照
+  - 附加痕迹与被检测风险说明
+  - 关键分支的实测走向
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'gdb -q -p {{pid}}'
+    note: 附加到运行中的进程；部分系统需先放开 ptrace 限制或具备相应权限
+  - cmd: 'gdb -q -batch -ex "info sharedlibrary" -ex "info registers" -p {{pid}}'
+    note: 非交互采集模块加载与寄存器快照，适合脚本化多次采样
+  - cmd: 'lldb -p {{pid}} -o "thread backtrace all" -o "detach" -o "quit"'
+    note: Apple 平台侧等价操作；必须显式 detach，否则进程会一直停住
+  pitfalls:
+  - 附加会留下调试器痕迹，目标可据此改变行为而不是被拦住
+  - 软件断点改写指令字节，基于校验和的完整性检查会发现它
+  - 暂停时间过长会触发心跳与超时逻辑，看到的行为不是原程序的正常行为
+  - 只读代码段写入软件断点可能失败，需改用硬件断点或先改页权限
+
+- id: tech:runtime-api-tracing
+  name: 运行时调用追踪
+  name_en: Runtime API Tracing
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 记录目标对系统与第三方库的调用序列，还原其真实交互面。难点是静态链接与内联封装会绕开可拦截的库调用，追踪结果只覆盖一部分行为。
+  difficulty: 2
+  prerequisites:
+  - tech:debugger-attach-and-breakpoint
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  - art:mach-o
+  outputs:
+  - 库调用时序记录
+  - 文件与注册表访问清单
+  - 库依赖的真实使用情况
+  - 未被覆盖的行为盲区
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'ltrace -f -o {{out}} {{binary}}'
+    note: 跟踪库函数调用；对静态链接或内联封装的程序几乎无效
+  - cmd: 'strace -f -o {{out}} {{binary}}'
+    note: 跟踪系统调用，覆盖一切落到内核的行为，但看不到用户态内部逻辑
+  - cmd: 'frida-trace -p {{pid}} -i "recv*" -i "send*"'
+    note: 按通配拦截指定函数，适合只看网络相关调用；需目标允许注入
+  pitfalls:
+  - 只跟踪系统调用时，程序内部的加密与封装逻辑一行都看不到
+  - 静态链接程序没有可拦截的动态符号，结果为空不代表没有库调用
+  - 通配过宽会产生巨量噪音，关键调用被淹掉，必须先缩小到具体模块
+  - 带反调试的目标检测到跟踪后可能直接退出，记录会是空的
+
+- id: tech:syscall-tracing
+  name: 系统调用追踪
+  name_en: System Call Tracing
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 在内核边界记录系统调用与参数，识别被刻意隐藏的文件、网络与进程操作。难点是参数在内核入口处才确定，缓冲区内容需额外读取才能还原。
+  difficulty: 3
+  prerequisites:
+  - tech:runtime-api-tracing
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  - art:driver
+  outputs:
+  - 系统调用序列与时间戳
+  - 被访问的路径与套接字
+  - 可疑的直接系统调用点
+  - 参数内容的还原结果
+  cost: medium
+  false_positive_risk: low
+  commands:
+  - cmd: 'strace -f -tt -s 256 -o {{out}} {{binary}}'
+    note: 带时间戳并放大字符串截断长度，避免关键路径被截断
+  - cmd: 'strace -f -e trace=openat,open,connect,execve -o {{out}} {{binary}}'
+    note: 只留高价值调用，输出量可控
+  - cmd: 'gdb -q -batch -ex "catch syscall" -ex run -ex "info registers" {{binary}}'
+    note: 在调试器里停于系统调用入口，可配合寄存器还原参数
+  pitfalls:
+  - 不加跟随子进程的选项会漏掉子进程，实际行为常在子进程里发生
+  - 默认字符串截断长度会切掉长路径，必须显式放大
+  - 直接系统调用不经过库函数，只在系统调用侧可见，库调用侧为空
+  - 调用被拦截重定向时，看到的是重定向后的路径，不是程序里写的那个
+
+- id: tech:callstack-and-backtrace-analysis
+  name: 调用栈回溯
+  name_en: Call Stack & Backtrace Analysis
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 沿栈帧还原当前执行点的调用链，定位谁调用了谁。难点是帧指针被省略或栈被破坏后，回溯会静默给出错误的调用链而不是报错。
+  difficulty: 3
+  prerequisites:
+  - tech:stack-frame-recovery
+  - tech:debugger-attach-and-breakpoint
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:mach-o
+  - art:memory-dump
+  outputs:
+  - 调用链与返回地址列表
+  - 栈被破坏的判断依据
+  - 展开信息缺失时的替代方法
+  - 各层参数的实际取值
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'gdb -q -batch -ex "thread apply all bt full" -p {{pid}}'
+    note: 一次拿全部线程的完整回溯，是判断卡在哪的最快手段
+  - cmd: 'gdb -q -batch -ex "x/40gx $sp" -p {{pid}}'
+    note: 回溯不可信时直接读栈内存，手工找出可信的返回地址
+  - cmd: 'readelf --debug-dump=frames {{binary}}'
+    note: 有异常帧信息时可查展开规则，判断回溯是否按正确规则进行
+  pitfalls:
+  - 无帧指针时回溯走启发式扫描，可能给出看起来合理但完全错误的栈
+  - 返回地址被篡改或栈被越界写后，回溯会读到相邻函数的地址
+  - 信号处理上下文里直接回溯看到的是信号处理函数，需先切到被中断上下文
+  - 展开信息缺失且栈不可读时，回溯结果必须标注为不可信，不能当证据
+
+- id: tech:native-runtime-instrumentation
+  name: 原生层运行时插桩
+  name_en: Native Runtime Instrumentation
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 在进程内注入钩子，读写函数参数、返回值与内存，观察静态得不到的真实数据流。难点是 ABI 与运行时差异会让钩子取错寄存器，造成静默错值。
+  difficulty: 4
+  prerequisites:
+  - tech:debugger-attach-and-breakpoint
+  - tech:calling-convention-recovery
+  artifacts:
+  - art:so
+  - art:elf64
+  - art:pe64
+  - art:mach-o
+  outputs:
+  - 关键函数的真实入参与返回值
+  - 解密后的内存数据
+  - 调用频率与调用者分布
+  - 钩子失效点清单
+  cost: medium
+  false_positive_risk: medium
+  note: 与既有 tech:mobile-runtime-instrumentation 的边界：那条针对移动应用运行时与加固对抗，这条面向桌面与服务端的原生程序，钩子机制与 ABI 假定不同。
+  commands:
+  - cmd: 'frida -p {{pid}} -l hook.js'
+    note: 注入脚本挂函数；脚本里必须显式声明参数类型与 ABI
+  - cmd: 'frida-trace -p {{pid}} -i "AES_*" -i "EVP_*"'
+    note: 按通配批量挂加密相关函数，先看调用序列再决定深挖哪个
+  - cmd: 'gdb -q -batch -ex "info symbol $pc" -p {{pid}}'
+    note: 确认当前停在哪个符号上，避免在错误位置下钩子
+  pitfalls:
+  - 32 位与 64 位寄存器宽度不同，参数读取用错宽度会得到截断值
+  - 注入本身可被检测，目标会改变行为或退出而不是被拦住
+  - 多线程下读全局缓冲区有竞态，可能拿到改写前或半写入的数据
+  - 钩住被内联的函数无效，因为调用点已经不再经过该地址
+
+- id: tech:memory-scan-and-patch
+  name: 内存扫描与热补丁
+  name_en: Memory Scanning & Live Patching
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 在运行态搜索特定值或指令特征并就地修改，绕开一次性校验。难点是写入前必须改页权限，且补丁长度不等长会破坏相邻指令。
+  difficulty: 3
+  prerequisites:
+  - tech:debugger-attach-and-breakpoint
+  artifacts:
+  - art:memory-dump
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 目标地址定位结果
+  - 可复现的补丁字节序列
+  - 补丁前后的行为差异
+  - 完整性校验触发情况
+  cost: low
+  false_positive_risk: medium
+  commands:
+  - cmd: 'gdb -q -batch -ex "find /b 0x0, 0xffffffffffff, 0x48, 0x8b" -p {{pid}}'
+    note: 按字节特征搜指令序列；范围要给合理上界，全地址空间搜索极慢
+  - cmd: 'gcore -o {{out}} {{pid}}'
+    note: 先落一份内存快照再离线分析，避免反复附加扰动目标
+  - cmd: 'gdb -q -batch -ex "set {char}[0x401000] = 0x90" -p {{pid}}'
+    note: 就地改写单个字节；代码段只读时必须先改页权限
+  pitfalls:
+  - 代码段默认只读，直接写会失败或触发访问异常
+  - 用 1 字节补丁替换 5 字节指令会把后续指令拆坏
+  - 运行期数值会变，搜到的地址下次运行就失效，地址随机化下更明显
+  - 补丁后不重置校验和会被完整性检查发现，行为与预期不同
+
+- id: tech:concolic-execution
+  name: 动态符号执行
+  name_en: Dynamic Symbolic Execution
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 在实际执行轨迹上做符号化求解，逐个翻转分支约束以覆盖深层判断。难点是路径爆炸与环境交互建模，外部依赖缺口会让求解失去意义。
+  difficulty: 5
+  prerequisites:
+  - tech:static-data-flow-analysis
+  - tech:debugger-attach-and-breakpoint
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:shellcode
+  - art:so
+  outputs:
+  - 可达路径与已覆盖分支
+  - 满足条件的输入约束
+  - 未解与超时路径清单
+  - 环境依赖缺口说明
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'python3 -c "import angr,sys; p=angr.Project(sys.argv[1], auto_load_libs=False); print(p.arch, hex(p.entry))" {{binary}}'
+    note: 建立初始状态前先确认加载正确，架构与入口解析错则后续全废
+  - cmd: 'r2 -q -c "aaa; afl" {{binary}}'
+    note: 先枚举函数与分支，选出值得符号化的目标，不要盲跑整个程序
+  - cmd: 'strace -f -s 128 -e trace=read -o {{out}} {{binary}}'
+    note: 目标读取长度决定符号化输入的维度，先量清楚再建状态
+  pitfalls:
+  - 只覆盖它探索到的路径，没解出来不等于不可达
+  - 求解得到的输入是满足约束的一组值，不等于真实业务场景下的可用输入
+  - 反调试与自修改代码会让轨迹失真，可达结论可能在实际运行中走不到
+  - 路径爆炸是常态，必须设探索上限并把超时路径明确列出
+
+- id: tech:environment-and-time-emulation
+  name: 时间与环境模拟
+  name_en: Time & Environment Emulation
+  domain:
+  - dom:re-dynamic
+  parent: dom:re-dynamic
+  def: 操纵时钟、网络可达性与设备标识，让依赖环境的逻辑走到被隐藏的分支。难点是改环境本身会成为可检测信号，真实依赖也难以完全模拟。
+  difficulty: 3
+  prerequisites:
+  - tech:debugger-attach-and-breakpoint
+  - tech:runtime-api-tracing
+  artifacts:
+  - art:pe64
+  - art:elf64
+  - art:so
+  - art:script
+  outputs:
+  - 被隐藏分支的触发条件清单
+  - 环境依赖点与替换记录
+  - 模拟前后的行为差异
+  - 未覆盖的环境维度
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'faketime "2020-01-01 00:00:00" {{binary}}'
+    note: 用时间包装器模拟指定时钟；仅在支持预加载拦截的环境可用
+  - cmd: 'frida -p {{pid}} -l time.js'
+    note: 在进程内改写取时函数，比外部包装更难绕过，同样也可被检测
+  - cmd: 'unshare -n {{binary}}'
+    note: 在无网络命名空间里运行，观察目标在断网时的分支走向
+  pitfalls:
+  - 时间跳跃本身是可检测信号，目标会交叉比对多个时间源是否一致
+  - 只改一个取时接口无效，程序可能同时用多个来源互相校验
+  - 断网后目标会走重试与退避分支，那并不是无网络时的原始逻辑
+  - 环境差异（主机名、用户目录、磁盘容量）同样会被检测到
+
+# ============================================================
+# dom:re-unpacking · 加壳与脱壳
+# ============================================================
+
+- id: tech:packer-fingerprinting
+  name: 壳类型指纹识别
+  name_en: Packer Fingerprinting
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 判定目标是否加壳、属于压缩壳还是保护壳，为后续路线定方向。难点是定制壳会刻意抹掉标识，节区名与入口形态都能伪造。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 壳类型与族系判定
+  - 判定依据与矛盾点
+  - 加壳层数推测
+  - 后续脱壳路线建议
+  cost: low
+  false_positive_risk: medium
+  note: 与既有 tech:malware-static-triage 的加壳判定有交集：那条把加壳判定作为样本研判的一个输出，本条专做壳识别并延伸到族系与层数，结论粒度更细。
+  commands:
+  - cmd: 'diec {{binary}}'
+    note: 给出壳与编译器判定；判定库更新滞后时会误判，需人工复核
+  - cmd: 'rabin2 -I {{binary}}'
+    note: 看入口位置、节区名与熵，入口落在非常规区段是强信号
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d[:2])" {{binary}}'
+    note: 核对文件头是否仍是合法映像头；有些壳把原始头存在别处
+  pitfalls:
+  - 节区名可被刻意改成正常名字，按名字判定会直接判错
+  - 高熵不必然是壳，加密资源与压缩数据同样是高熵
+  - 同一壳的不同版本特征不同，识别出族系不代表知道具体版本
+  - 虚拟化保护不会表现为整段高熵，它的代码段是正常可读的分发器
+
+- id: tech:oep-location
+  name: 原始入口点定位
+  name_en: Original Entry Point Location
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 找到壳把控制权交还给原始程序的时刻，作为转储与修复的锚点。难点是交接可以发生在任意深度，还可能被切成多次分段执行。
+  difficulty: 4
+  prerequisites:
+  - tech:packer-fingerprinting
+  - tech:debugger-attach-and-breakpoint
+  - tech:callstack-and-backtrace-analysis
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 原始入口点地址与命中依据
+  - 交接时刻的内存与寄存器状态
+  - 分段执行模式说明
+  - 未命中时的备选判据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'gdb -q -batch -ex "catch syscall mprotect" -ex run -ex "info registers" {{binary}}'
+    note: 壳写完代码后通常要改页权限，权限变更常出现在交接之前
+  - cmd: 'strace -f -e trace=mprotect -o {{out}} {{binary}}'
+    note: 记录权限变更的地址与范围，用于缩小目标区段
+  - cmd: 'gdb -q -batch -ex "break *0x0" -ex run -ex bt {{binary}}'
+    note: 在可疑交接点停下看栈，栈上残留的加载器痕迹可佐证
+  pitfalls:
+  - 入口落在系统库里的情形是常见误报，那不是目标程序的原始入口
+  - 分段解壳时第一次交接只是中间态，停早了转储出来的是半成品
+  - 入口地址正确不代表可独立运行，那段代码仍可能依赖运行时数据
+  - 单步跟完整个壳在真实样本上几乎不可行，必须在关键调用上设断
+
+- id: tech:memory-dump-rebuild
+  name: 内存转储与镜像重建
+  name_en: Memory Dump & Image Rebuild
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 抓取解壳后的内存区域并按映像布局重拼成可分析文件，修复节区与对齐。难点是内存布局与文件布局的偏移映射不一致，区段边界要自行判定。
+  difficulty: 4
+  prerequisites:
+  - tech:oep-location
+  artifacts:
+  - art:memory-dump
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  outputs:
+  - 可反编译的重建镜像
+  - 内存布局与文件布局映射表
+  - 修复项清单
+  - 残留不一致点说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'gcore -o {{out}} {{pid}}'
+    note: 抓整进程内存；产物是全地址空间映像，需按段裁出目标区
+  - cmd: 'procdump -ma {{pid}} {{out}}'
+    note: Windows 侧整进程转储，模块边界仍可依加载器结构定位
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(len(d))" {{out}}'
+    note: 先确认转储大小与预期内存范围匹配，再谈修复
+  pitfalls:
+  - 内存按页对齐而文件按文件对齐，整块写出会让所有偏移错位
+  - 未初始化数据段在内存里有值但文件里不该有，保留它会让后续比对失真
+  - 转储时机不对会抓到解壳中途的混合态，代码一半新一半旧
+  - 有些壳会清零头部或抽走节区表，重建时必须先补回头部
+
+- id: tech:iat-rebuild
+  name: 导入表重建
+  name_en: Import Table Rebuild
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 恢复被壳重写或抹除的导入表，让转储镜像重新具备可分析的符号引用。难点是运行期解析出的地址已丢失原始名字，只能靠调用特征反查。
+  difficulty: 5
+  prerequisites:
+  - tech:memory-dump-rebuild
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:so
+  outputs:
+  - 重建后的导入表
+  - 无法归属的调用地址清单
+  - 按调用特征推断的候选接口
+  - 重建前后的一致性校验结果
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'rabin2 -i {{binary}}'
+    note: 读当前导入表，判断是空表、残缺表还是指向壳自己的表
+  - cmd: 'gdb -q -batch -ex "info functions ^.*LoadLibrary" {{binary}}'
+    note: 有符号时可反查已解析函数地址，用来给空洞项填名
+  - cmd: 'objdump -T {{binary}}'
+    note: 对照动态符号，核对重建结果是否与原始依赖一致
+  pitfalls:
+  - 转储时表里可能已被填入真实地址，直接当函数指针看会当成代码
+  - 壳可以把部分调用改成哈希解析，这类调用永远不在标准导入表里
+  - 重建后忘改目录表里的偏移与大小，镜像看起来有表但加载器不认
+  - 按地址猜接口会张冠李戴，同名导出在不同模块里地址不同
+
+- id: tech:anti-dump-countermeasure-analysis
+  name: 反转储与自校验分析
+  name_en: Anti-Dump & Self-Check Analysis
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 识别壳为阻止转储与篡改而布设的检查点，包括头部擦除、区段改写与校验回路。难点是检查散落在多条路径上，绕掉一个还会从别处触发。
+  difficulty: 5
+  prerequisites:
+  - tech:memory-dump-rebuild
+  - tech:syscall-tracing
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 检查点清单与触发条件
+  - 检查点与转储行为的冲突矩阵
+  - 可安全绕过的顺序说明
+  - 无法消除的残余检查
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'gdb -q -batch -ex "catch syscall mprotect" -ex run -ex bt {{binary}}'
+    note: 在权限变更处看栈，反转储手段常与页权限翻转同时出现
+  - cmd: 'r2 -q -c "aaa; axt @ sym.main" {{binary}}'
+    note: 反查入口被谁引用，可定位壳在交接前后插入的检查调用
+  - cmd: 'strace -f -o {{out}} {{binary}}'
+    note: 观察异常调用序列（自读自身、信号使用）是检查点存在的侧证
+  pitfalls:
+  - 绕过一个检查点后程序静默走到错误分支，不报错，极易误以为成功
+  - 自校验覆盖范围可能包含你自己打的补丁，改一处触发另一处
+  - 用信号与异常实现的检查在调试器下表现不同，静态看到从不触发不代表运行时不触发
+  - 部分手段依赖硬件或环境（调试寄存器、时间差），换环境结论失效
+
+- id: tech:emulation-assisted-unpacking
+  name: 模拟执行辅助脱壳
+  name_en: Emulation-Assisted Unpacking
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 在受控模拟环境里跑解壳代码，记录写内存与分支，自动推进到交接点。难点是壳会探测执行环境，模拟不完整就会卡在自检逻辑里。
+  difficulty: 4
+  prerequisites:
+  - tech:packer-fingerprinting
+  - tech:oep-location
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:shellcode
+  outputs:
+  - 写内存轨迹与解压后的区段
+  - 自动判定的交接点
+  - 缺失的环境模拟项清单
+  - 失败原因定位
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'qemu-x86_64 -d in_asm -D {{out}} {{binary}}'
+    note: 用户态模拟执行并记录指令流；仅依赖较少的壳才跑得通
+  - cmd: 'python3 -c "import angr,sys; p=angr.Project(sys.argv[1], auto_load_libs=False); print(p.arch)" {{binary}}'
+    note: 用模拟执行框架驱动解壳循环，先确认架构与基址解析正确
+  - cmd: 'strace -f -e trace=write -o {{out}} {{binary}}'
+    note: 对照真实运行的调用序列，找出模拟环境里缺失或行为不同的调用
+  pitfalls:
+  - 壳会读进程环境块与 CPU 特性，模拟器缺这些结构就会走进死循环
+  - 指令计数与时间戳被用作解压参数时，模拟时序必须与真实一致
+  - 跑到交接点后仍需真实执行验证，纯模拟产物不可直接采信
+  - 反虚拟机检测在这里同样生效，只是判据换了一套
+
+- id: tech:vm-protection-analysis
+  name: 虚拟化保护分析
+  name_en: Virtualization-Based Protection Analysis
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 分析把指令翻译成自定义字节码执行的分发器，还原被虚拟化的语义。难点是没有可还原的原始机器码，只能靠语义映射逐条重建。
+  difficulty: 5
+  prerequisites:
+  - tech:anti-dump-countermeasure-analysis
+  - tech:control-flow-graph-recovery
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 分发器与字节码布局
+  - 指令语义映射表
+  - 已还原的虚拟化函数
+  - 未覆盖的虚拟指令清单
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'r2 -q -c "aaa; afl" {{binary}}'
+    note: 先定位分发器，单个大型分支循环是这类保护的结构标志
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}}'
+    note: 核对手写分发器的跳转表形态，确定虚拟指令的字长与取指方式
+  - cmd: 'gdb -q -batch -ex "watch -l *(char*)0x0" {{binary}}'
+    note: 在真实执行里观察字节码指针推进，验证语义映射是否正确
+  pitfalls:
+  - 虚拟化后不存在可交接的原始入口，按常规脱壳流程会一直找不到锚点
+  - 虚拟指令集可被随机化，同一保护器的不同函数可能用两套映射
+  - 逐条映射成本极高，必须限定在影响结论的函数上，别试图全量还原
+  - 分发器里常嵌套异常与反调试，跟踪会被跳出
+
+- id: tech:multi-layer-unpacking
+  name: 嵌套壳逐层剥离
+  name_en: Multi-Layer Unpacking
+  domain:
+  - dom:re-unpacking
+  parent: dom:re-unpacking
+  def: 按层次逐层剥离叠加的多重保护，每剥一层重新判定下一层。难点是层间共享解压缓冲，过早剥离会把下一层的数据当成代码读。
+  difficulty: 4
+  prerequisites:
+  - tech:packer-fingerprinting
+  - tech:iat-rebuild
+  - tech:executable-unpacking
+  artifacts:
+  - art:pe32
+  - art:pe64
+  - art:elf64
+  - art:memory-dump
+  outputs:
+  - 层数与每层判定依据
+  - 逐层转储产物与对应关系
+  - 层间数据依赖说明
+  - 最终可分析镜像
+  cost: high
+  false_positive_risk: medium
+  note: 前置 tech:executable-unpacking 是既有条目，本条不重复单层脱壳方法，只处理叠加层的顺序与层间依赖判定。
+  commands:
+  - cmd: 'upx -d {{binary}} -o {{out}}'
+    note: 仅对这类压缩壳有效；识别失败说明外层不是标准实现，别硬套
+  - cmd: 'rabin2 -I {{out}}'
+    note: 每剥一层就重新判定，确认产物仍是合法映像再进下一层
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(len(d), d[:4])" {{out}}'
+    note: 逐层核对产物大小与头部，层数判断错时这里会立刻暴露
+  pitfalls:
+  - 最常见的错是把资源里的压缩数据当成一层壳
+  - 内层可能依赖外层解出的密钥与内存状态，单独剥离后无法独立运行
+  - 每层都要重新修导入表与对齐，漏修会让下一层的判定失真
+  - 剥离顺序错了会得到合法但语义错误的镜像，能反编译不代表是对的
+
+# ============================================================
+# dom:re-lang · 语言产物逆向
+# ============================================================
+
+- id: tech:dotnet-metadata-recovery
+  name: 托管元数据与指令还原
+  name_en: Managed Metadata & IL Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 还原托管程序集的类型、方法与中间语言指令，进入字节码层理解逻辑。难点是元数据表可被篡改或整体加密，条目错乱会让反编译只出一半。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe-dotnet
+  - art:jar
+  outputs:
+  - 类型与方法清单
+  - 可读的中间语言或反编译源码
+  - 元数据异常项清单
+  - 需进一步还原的入口点
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'monodis --output={{out}} {{binary}}'
+    note: 导出完整中间语言；不依赖符号即可用，适合先拿全貌
+  - cmd: 'ilspycmd -o {{out}} {{binary}}'
+    note: 直接出工程级源码，比读中间语言快；失败通常说明元数据被动过
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d.find(b\"BSJB\"))" {{binary}}'
+    note: 找元数据签名，确认托管头存在且元数据区位置正常
+  pitfalls:
+  - 保护方案会加密元数据，反编译器只输出空壳类，问题在元数据不在指令
+  - 混合模式程序集的原生部分不在中间语言里，只看托管层会漏关键逻辑
+  - 混淆后类型名可能是不可见字符，别按名字判断用途
+  - 单文件发布把程序集打包进原生宿主，直接反编译宿主得不到业务代码
+
+- id: tech:dotnet-obfuscation-normalization
+  name: 托管混淆归一化
+  name_en: Managed Obfuscation Normalization
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 消除标识符重命名、字符串加密与控制流平坦化，恢复可读的托管代码。难点是多种混淆可叠加，且部分保护会主动破坏反编译器的元数据解析。
+  difficulty: 3
+  prerequisites:
+  - tech:dotnet-metadata-recovery
+  artifacts:
+  - art:pe-dotnet
+  outputs:
+  - 去混淆后的程序集
+  - 解密出的字符串表
+  - 混淆器与手法清单
+  - 无法自动恢复的残留项
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'de4dot {{binary}}'
+    note: 自动识别并去除常见混淆；产物默认写在当前目录，先备份原件
+  - cmd: 'ilspycmd -o {{out}} {{binary}}'
+    note: 每轮处理后重新反编译，对比可读性变化判断是否真有效
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print([s for s in [b\"ConfusedBy\",b\"Babel\"] if s in d])" {{binary}}'
+    note: 在文件里找混淆器残留标识，作为选路线的依据
+  pitfalls:
+  - 去混淆失败时工具仍可能输出文件，看起来成功但内容没变，必须复核
+  - 某些混淆把指令改成不可验证形式，处理后仍需手工修才能反编译
+  - 字符串解密常依赖运行期初始化的密钥，静态处理拿不到全部明文
+  - 处理过的程序集签名失效，强命名校验场景下加载会直接失败
+
+- id: tech:symbol-demangling
+  name: 符号修饰还原
+  name_en: Symbol Demangling
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 把编译器生成的修饰名还原成可读的命名空间、类与函数签名。难点是不同编译器与语言的修饰规则不同，残缺或截断的修饰名无法唯一反解。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:so
+  outputs:
+  - 还原后的可读符号名
+  - 编译器族与语言推断
+  - 无法反解的残缺修饰名清单
+  - 同名不同实现的去重结果
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'nm -C {{binary}}'
+    note: 多数工具链可直接还原修饰名，先看能还原多少
+  - cmd: 'nm {{binary}} | c++filt'
+    note: 显式过一遍该类解码器，能处理未覆盖的变体
+  - cmd: 'nm {{binary}} | rustfilt'
+    note: 另一种语言的修饰名需要专门解码器，混编产物里两种都要试
+  pitfalls:
+  - 修饰名被截断成前缀后无法唯一反解，强行还原会得到错误签名
+  - 不同编译器对同一符号生成的修饰名不同，按格式判定语言并不可靠
+  - 模板实例展开后名字极长，可读性提升不代表找到了对应源码
+  - 混淆器会生成形似修饰名的假名字，看起来像合法命名但并不符合规则
+
+- id: tech:go-symbol-recovery
+  name: Go 产物符号与结构还原
+  name_en: Go Artifact Symbol Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 利用运行时元数据表恢复函数名、类型信息与包路径，重建调用关系。难点是符号被剥离后元数据仍在，但要按运行时版本定位其结构。
+  difficulty: 3
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:mach-o
+  outputs:
+  - 恢复的函数名与包路径清单
+  - 类型与方法信息
+  - 运行时版本判定
+  - 调用关系草图
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'go version -m {{binary}}'
+    note: 直接读出构建信息与依赖模块，是最省力也最可靠的入口
+  - cmd: 'go tool nm {{binary}} | head -50'
+    note: 符号表即使被处理过也可能有残留，先确认还有没有名字
+  - cmd: 'strings -a {{binary}} | grep -E "^go1\.[0-9]+" | head'
+    note: 版本字符串决定元数据布局，版本不同表结构不同
+  pitfalls:
+  - 这类产物通常不剥离符号，一旦剥离常连带删掉元数据，只能靠特征串恢复
+  - 版本差异导致元数据布局不同，用错版本的解析器会读出乱码名字
+  - 泛型实例化后函数名带类型参数修饰，直接按包名检索容易漏
+  - 内联与闭包改写会让符号对应的函数体与源码形态差异较大
+
+- id: tech:rust-artifact-identification
+  name: Rust 产物识别与符号还原
+  name_en: Rust Artifact Identification
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 从恐慌字符串、修饰名与内存布局特征确认语言产物并还原符号。难点是默认发布构建剥离符号且大量内联，可用的语言特征只剩间接痕迹。
+  difficulty: 4
+  prerequisites:
+  - tech:binary-triage-metadata
+  - tech:symbol-demangling
+  artifacts:
+  - art:elf64
+  - art:pe64
+  - art:mach-o
+  outputs:
+  - 语言与构建模式判定
+  - 还原的函数路径与模块名
+  - 依赖库推断
+  - 不可恢复区域说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'strings -a {{binary}} | grep -Ei "panicked at|cargo/registry|rustc" | head'
+    note: 恐慌信息与构建路径是最常见的语言指纹
+  - cmd: 'nm -C {{binary}} | head -50'
+    note: 带修饰名的符号可直接看出模块路径，未剥离时优先用这个
+  - cmd: 'nm {{binary}} | rustfilt | head -50'
+    note: 用专用解码器还原修饰名，比手工解析可靠
+  pitfalls:
+  - 两类语言的修饰名形态不同但都可被截断，符号残缺时无法反解
+  - 剥离符号后差异只剩恐慌路径与展开结构，结论只能是概率判断
+  - 泛型与迭代器链会展开成巨量内联代码，函数级边界极难划定
+  - 静态链接 C 运行库后无法按依赖区分语言，别把运行库特征算成语言特征
+
+- id: tech:e-language-recovery
+  name: 易语言产物还原
+  name_en: E-Language Artifact Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 识别国内某类中文编程语言的编译产物，还原其运行库依赖与特有调用形态。难点是公开资料少且编译特征弱，多数判断依赖字符串与库调用模式。
+  difficulty: 4
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pe32
+  - art:pe64
+  outputs:
+  - 产物判定依据
+  - 依赖的支持库清单
+  - 关键子程序与调用关系
+  - 不确定项说明
+  cost: medium
+  false_positive_risk: high
+  commands:
+  - cmd: 'strings -el {{binary}} | head -60'
+    note: 该语言的字符串多为宽字符编码，用宽字符模式提取才看得到
+  - cmd: 'rabin2 -zz {{binary}} | grep -Ei "krnln|fnr|e\.lib" | head'
+    note: 支持库名与扩展库文件名是最强的判定依据
+  - cmd: 'objdump -d --no-show-raw-insn {{binary}} | grep -c "call"'
+    note: 粗看调用密度；大量经运行时库转发时调用形态偏单一
+  pitfalls:
+  - 宽字符与单字节字符串混杂，只用单字节提取会漏掉大部分可读信息
+  - 加保护后支持库名会被加密，静态看不到名字不代表不是该语言产物
+  - 国内同类语言产物特征相近，仅凭字符串判定容易误判
+  - 该语言调用惯例与常见约定不同，按标准约定还原参数会整体错位
+
+- id: tech:managed-native-interop-mapping
+  name: 托管原生互操作映射
+  name_en: Managed-Native Interop Mapping
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 还原托管层与原生层的边界：声明、导出绑定与数据封送方式。难点是边界处类型被双向转换，参数形态在两侧并不一致。
+  difficulty: 3
+  prerequisites:
+  - tech:dotnet-metadata-recovery
+  artifacts:
+  - art:pe-dotnet
+  - art:so
+  - art:dex
+  - art:apk
+  outputs:
+  - 托管到原生的绑定表
+  - 封送类型与宽度对照
+  - 原生侧实现入口清单
+  - 边界处的数据转换说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'monodis --method {{binary}} | grep -i "pinvokeimpl"'
+    note: 外部调用声明会带标记，直接给出目标原生函数名
+  - cmd: 'rabin2 -i {{apk}}'
+    note: 移动侧先看原生库与导入，绑定注册在原生库导出里能找到线索
+  - cmd: 'nm -D {{binary}}'
+    note: 原生库侧看导出名，与托管侧声明对齐
+  pitfalls:
+  - 动态注册的绑定方法不出现在导出表里，只能搜注册函数调用
+  - 封送会改变参数宽度与生命周期，两侧签名不能直接对照
+  - 同名导出可能被多个托管声明共用，绑定关系不是一对一
+  - 混淆后原生方法名被抹改，按名字匹配会全部落空
+
+- id: tech:interpreter-bytecode-recovery
+  name: 脚本产物字节码还原
+  name_en: Script Artifact Bytecode Recovery
+  domain:
+  - dom:re-lang
+  parent: dom:re-lang
+  def: 从打包后的解释器程序中提取业务字节码并还原到源码级可读形态。难点是解释器可能被定制或加密，标准反编译工具对不上版本。
+  difficulty: 4
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:script
+  - art:elf64
+  - art:pe64
+  - art:document
+  outputs:
+  - 提取出的字节码或脚本片段
+  - 解释器与版本判定
+  - 还原后的源码级逻辑
+  - 版本不匹配点说明
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'strings -a {{binary}} | grep -Ei "python|PyInstaller|lua|autoit" | head'
+    note: 先确认内嵌的是哪种解释器及其版本线索
+  - cmd: 'binwalk {{binary}}'
+    note: 按签名切出内嵌归档或压缩段，再单独处理
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d.find(b\"PYZ\"), d.find(b\"MEI\"))" {{binary}}'
+    note: 定位打包产物的归档区偏移，是提取字节码的第一步
+  pitfalls:
+  - 打包工具与提取工具版本必须匹配，版本不符时提取出的字节码无法反编译
+  - 字节码可能被二次加密，提取成功不等于能反编译
+  - 单文件打包会把依赖一起塞进去，切分边界靠签名猜容易切坏
+  - 定制解释器的指令集被改过，标准反编译器会静默输出错误指令
+
+# ============================================================
+# dom:re-protocol · 协议与网络逆向
+# ============================================================
+
+- id: tech:traffic-session-reassembly
+  name: 流量会话重组
+  name_en: Traffic Session Reassembly
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 把抓包还原成双向会话与消息序列，为字段分析准备干净输入。难点是分片、重传与长连接并发会让消息边界无法从包边界直接读出。
+  difficulty: 2
+  prerequisites:
+  - tech:binary-triage-metadata
+  artifacts:
+  - art:pcap
+  - art:elf64
+  - art:apk
+  outputs:
+  - 双向会话清单与消息序列
+  - 按连接切分的原始载荷
+  - 重传与分片等异常流量清单
+  - 待深挖的会话列表
+  cost: low
+  false_positive_risk: low
+  commands:
+  - cmd: 'tshark -r {{pcap}} -q -z io,phs'
+    note: 先看协议层次统计，判断哪种协议承载了业务流量
+  - cmd: 'tshark -r {{pcap}} -q -z follow,tcp,raw,0'
+    note: 按流向拼出完整会话载荷，比逐包读更有用
+  - cmd: 'tcpdump -r {{pcap}} -nn -X -c 20'
+    note: 抽前若干包看十六进制形态，快速判断文本还是二进制协议
+  - cmd: 'rabin2 -zz {{binary}} | grep -Ei "content-type|application/json" | head'
+    note: 在客户端里找协议关键字，先确认接口的编码形态再谈重组
+  pitfalls:
+  - 只看单个包会把跨包消息当成多次独立请求，字段边界全错
+  - 长连接上并发多条请求，仅靠包顺序无法还原请求响应配对
+  - 加密流量的载荷不可读，会话重组只能给出时序与长度
+  - 重传与分片产生重复片段，直接拼接会插入重复字节
+
+- id: tech:field-boundary-inference
+  name: 协议字段边界推断
+  name_en: Protocol Field Boundary Inference
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 通过同类消息的差分与长度关联，推断未知协议的字段切分与语义。难点是可变长字段与填充使位置不固定，单条样本无法确定边界。
+  difficulty: 4
+  prerequisites:
+  - tech:traffic-session-reassembly
+  artifacts:
+  - art:pcap
+  - art:apk
+  - art:elf64
+  - art:so
+  outputs:
+  - 字段切分表与偏移
+  - 各字段候选语义
+  - 变长字段的长度来源
+  - 未定边界区间说明
+  cost: medium
+  false_positive_risk: high
+  note: 与既有 tech:network-traffic-interception 的边界：那条以拦截与证书固定绕过为主，字段推断只是其附带输出；本条专做明文载荷的字段切分与语义推断，不涉及拦截环境搭建。
+  commands:
+  - cmd: 'tshark -r {{pcap}} -T fields -e tcp.payload'
+    note: 只导载荷做批量对比，去掉包结构干扰
+  - cmd: 'python3 -c "import sys;a=open(sys.argv[1],\"rb\").read();print([(i,hex(b)) for i,b in enumerate(a[:64])])" {{out}}'
+    note: 把待比对载荷按字节展开，用于对齐多个样本找公共前缀
+  - cmd: 'protoc --decode_raw < {{out}}'
+    note: 先验证是否属于已知序列化格式，能解析出字段号就有现成结构线索
+  - cmd: 'rabin2 -zz {{binary}} | grep -Ei "malformed|too short|invalid length" | head'
+    note: 解析器的错误文案常暴露字段名与长度约束，可直接印证边界推断
+  pitfalls:
+  - 字段值恰好等于长度或序号时两种解释都自洽，必须用更多样本排除
+  - 定长填充区在不同版本长度可能变化，按固定偏移硬切换版本就全错
+  - 加密或压缩载荷的字节差分毫无意义，先确认载荷是否明文
+  - 只有一条样本时不存在边界推断，任何切分都只是猜想
+
+- id: tech:binary-serialization-inference
+  name: 二进制序列化逆推
+  name_en: Binary Serialization Inference
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 判定私有载荷采用的序列化框架并还原字段编号与类型。难点是常见框架都有多种编码变体，没有描述文件时类型只能靠值域推断。
+  difficulty: 4
+  prerequisites:
+  - tech:field-boundary-inference
+  artifacts:
+  - art:pcap
+  - art:so
+  - art:apk
+  - art:jar
+  outputs:
+  - 序列化框架判定
+  - 字段编号与标签字节含义
+  - 类型推断与值域约束
+  - 待验证字段清单
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'protoc --decode_raw < {{out}}'
+    note: 无描述符时也能按线格式解出字段号与值，是最快的判定手段
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(d[:16].hex())" {{out}}'
+    note: 看前若干字节的变长整数与标签，判断是否符合同一编码规则
+  - cmd: 'strings -a {{binary}} | grep -Ei "protobuf|thrift|msgpack|flatbuf" | head'
+    note: 在客户端二进制里找框架依赖，比盲猜载荷更直接
+  pitfalls:
+  - 变长整数编码的字节数随值变化，按固定长度解析会让后续字段全部错位
+  - 同一条消息里字段可乱序或缺省，缺省字段与零值字段在编码上无法区分
+  - 压缩后再序列化会掩盖所有结构，必须先解开压缩层
+  - 框架版本差异带来编码细节变化，判定框架不等于能正确解码
+
+- id: tech:protocol-state-machine-recovery
+  name: 协议状态机还原
+  name_en: Protocol State Machine Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 从会话序列归纳合法状态与迁移条件，解释为何某些请求只在特定顺序下生效。难点是状态隐含在服务端，客户端只看到被允许与拒绝的结果。
+  difficulty: 4
+  prerequisites:
+  - tech:traffic-session-reassembly
+  artifacts:
+  - art:pcap
+  - art:apk
+  - art:elf64
+  outputs:
+  - 状态与迁移图
+  - 触发条件与前置消息
+  - 被拒绝顺序的异常路径记录
+  - 状态判定依据
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'tshark -r {{pcap}} -T fields -e tcp.stream -e tcp.payload'
+    note: 按流导出载荷并按连接聚合，先看每条连接的消息顺序
+  - cmd: 'tshark -r {{pcap}} -q -z conv,tcp'
+    note: 看连接建立与结束分布，长连接里的顺序信息才有状态意义
+  - cmd: 'rabin2 -zz {{binary}} | grep -Ei "not_logged_in|invalid_state|please login" | head'
+    note: 服务端的拒绝文案常被固化进客户端，可反推哪些顺序约束是硬性的
+  - cmd: 'python3 -c "import sys;d=open(sys.argv[1],\"rb\").read();print(len(d))" {{out}}'
+    note: 核对导出载荷总量，确认导出环节没丢掉整段会话
+  pitfalls:
+  - 被动抓包只能看到走过的路径，没走到的迁移无法被推断出来
+  - 重放单条请求成功不代表状态无关，服务端可能刚被前一条请求改了状态
+  - 客户端重试与并发会打乱真实顺序，别把并发当成顺序状态
+  - 负载均衡后同一会话可能落到不同后端，状态表现不一致
+
+- id: tech:crypto-callsite-location
+  name: 加密调用点定位
+  name_en: Crypto Callsite Location
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 在客户端程序中定位执行加解密的具体位置，把协议字段与代码逻辑对上。难点是封装层次多，最终调用可能穿透数层转发才落到加密实现。
+  difficulty: 3
+  prerequisites:
+  - tech:field-boundary-inference
+  artifacts:
+  - art:so
+  - art:apk
+  - art:elf64
+  - art:pe64
+  outputs:
+  - 加密调用点地址与调用链
+  - 入参与出参的实测样本
+  - 上层封装与封装参数说明
+  - 未覆盖的加密路径
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'frida-trace -p {{pid}} -i "AES_*" -i "EVP_*" -i "SHA256_*"'
+    note: 挂标准加密接口，先看目标到底用了哪些算法
+  - cmd: 'r2 -q -c "aaa; axt @ sym.imp.EVP_EncryptUpdate" {{binary}}'
+    note: 静态反查谁调用了加密库，得到上层封装的位置
+  - cmd: 'gdb -q -batch -ex "break EVP_EncryptInit_ex" -ex "run" -ex "bt" {{binary}}'
+    note: 在真实调用点停下看栈，可验证静态推断的调用链
+  pitfalls:
+  - 自研或内联的加密实现完全不经过标准接口，挂标准接口一个都拦不到
+  - 加密库可能被静态链接并去掉符号，按导入表找会一无所获
+  - 同名接口在多处被调用，命中的未必是处理目标字段的那一处
+  - 上层封装的模式与填充在调用点看不出，需回看上一层的准备代码
+
+- id: tech:crypto-parameter-recovery
+  name: 加密参数与密钥流还原
+  name_en: Crypto Parameter Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 定位协议里的加密环节并还原算法、模式、密钥与初始向量的来源及派生方式。难点是密钥常由多字段拼接派生，静态与动态各只能看到一半。
+  difficulty: 5
+  prerequisites:
+  - tech:field-boundary-inference
+  - tech:crypto-callsite-location
+  artifacts:
+  - art:pcap
+  - art:so
+  - art:apk
+  - art:elf64
+  outputs:
+  - 算法与模式判定
+  - 密钥与初始向量的派生路径
+  - 明文与密文对照样本
+  - 未确定参数及影响范围
+  cost: high
+  false_positive_risk: medium
+  commands:
+  - cmd: 'rabin2 -zz {{binary}} | grep -Ei "aes|hmac|sha256|md5" | head'
+    note: 先看算法常量与查表数据，标准算法的置换表是极强指纹
+  - cmd: 'ltrace -f -e "EVP_*" -o {{out}} {{binary}}'
+    note: 观察加密库调用与参数，确认算法与模式选择
+  - cmd: 'openssl dgst -sha256 {{out}}'
+    note: 对怀疑是摘要的字段做对照计算，验证它是不是哈希而非密文
+  pitfalls:
+  - 密钥可能来自服务端下发的会话字段，只在客户端里找永远找不全
+  - 同一算法不同模式的输出长度与结构差异明显，但都叫同一个算法名
+  - 完整性校验字段与加密字段常相邻且长度相近，混判会解不出明文
+  - 把编码当成加密是最常见的浪费时间的误判
+
+- id: tech:checksum-field-recovery
+  name: 校验与签名字段还原
+  name_en: Checksum Field Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 定位协议中的校验与完整性字段，还原其计算范围与算法。难点是覆盖范围可能排除自身与某些保留位，范围错一位结果就完全不同。
+  difficulty: 4
+  prerequisites:
+  - tech:field-boundary-inference
+  artifacts:
+  - art:pcap
+  - art:so
+  - art:elf64
+  - art:jar
+  outputs:
+  - 校验字段位置与长度
+  - 参与计算的字节范围
+  - 算法与初值参数判定
+  - 验证结果与失败样本
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'python3 -c "import binascii,sys;d=open(sys.argv[1],\"rb\").read();print(hex(binascii.crc32(d)))" {{out}}'
+    note: 先用最常见的校验算法试；对不上再换其它变体
+  - cmd: 'tshark -r {{pcap}} -T fields -e tcp.payload'
+    note: 取多条同结构消息，比较哪几个字节随内容变化且位置固定
+  - cmd: 'rabin2 -zz {{binary}} | grep -Ei "crc|checksum|signature" | head'
+    note: 算法名与查表常量在客户端里通常留有痕迹
+  pitfalls:
+  - 同类校验算法有初值、反射与输出异或的多种变体，参数不对时结果毫无相似性
+  - 校验范围常排除校验字段自身，含入计算就永远对不上
+  - 校验字段可能被加密一并覆盖，先解密再算才有意义
+  - 字节序混淆会让结果稳定错，且看起来像是用了另一种算法
+
+- id: tech:payload-encoding-chain-recovery
+  name: 载荷编码链还原
+  name_en: Payload Encoding Chain Recovery
+  domain:
+  - dom:re-protocol
+  parent: dom:re-protocol
+  def: 逐层剥开载荷上的编码与压缩，恢复到可读明文。难点是层序未知，每一层都要靠数据特征试出来，而不是从结构里直接读出来。
+  difficulty: 3
+  prerequisites:
+  - tech:field-boundary-inference
+  - tech:binary-serialization-inference
+  artifacts:
+  - art:pcap
+  - art:apk
+  - art:so
+  - art:script
+  outputs:
+  - 编码与压缩的层序
+  - 每层的识别依据
+  - 还原后的明文字段
+  - 无法还原的层及原因
+  cost: medium
+  false_positive_risk: medium
+  commands:
+  - cmd: 'python3 -c "import base64,sys;d=open(sys.argv[1],\"rb\").read();print(base64.b64decode(d+b\"==\")[:64])" {{out}}'
+    note: 试文本编码一层；长度不是 4 的倍数时需先补齐
+  - cmd: 'binwalk {{out}}'
+    note: 按签名扫内嵌的压缩流与归档，快速判断下一层是什么
+  - cmd: 'python3 -c "import zlib,sys;d=open(sys.argv[1],\"rb\").read();print(zlib.decompress(d)[:64])" {{out}}'
+    note: 试通用压缩解压；失败说明不是裸压缩流或还隔着别的层
+  pitfalls:
+  - 层序错了会得到看似随机但长度正确的字节，容易被误判成已加密
+  - 压缩率极低的层其实是编码而非压缩，用解压去试会一直失败
+  - 同类编码的变体（URL 安全、去填充）用标准表解不出来
+  - 自定义字符表置换是最常见的障碍，先做频率统计再谈解码
