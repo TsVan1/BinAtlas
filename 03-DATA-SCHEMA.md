@@ -482,7 +482,7 @@ V13 的分母是**全库节点总数**，阈值 15%。
 | 路径 | 内容 | 说明 |
 | --- | --- | --- |
 | `data/domains.yaml` | 领域列表 | 单文件 |
-| `data/techniques.yaml` | 技术列表 | 单文件 |
+| `data/techniques.yaml` 或 `data/techniques/*.yaml` | 技术列表 | **两种都支持**：条目少用单文件；按领域拆分时用目录（装载器按目录名判定类型） |
 | `data/artifacts.yaml` | 载体列表 | 单文件 |
 | `data/tools/*.yaml` | 工具 | 按 22 类目拆文件 |
 | `data/edges/*.yaml` | 边 | 按 relation / technique-tool / misc 拆 |

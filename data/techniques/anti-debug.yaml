@@ -111,8 +111,8 @@
   - '每次停止都会清掉陷阱标志，连续单步要逐步重新进入，不能指望设置一次就一直生效'
 
 - id: tech:call-stack-unwinding
-  name: 调用栈回溯
-  name_en: Call Stack Unwinding
+  name: 运行时栈回溯
+  name_en: Runtime Call Stack Unwinding
   domain: [dom:ad-userdebug]
   parent: dom:ad-userdebug
   def: 由栈内容与展开信息还原调用链，定位是哪个调用点触发了敏感操作。难点是优化后的代码没有帧指针，异常帧与尾调用会打断链条。
@@ -160,30 +160,30 @@
   - '把信号设成不停止会让调试器错过异常点，而靠异常做控制流的代码正需要调试器看不见'
   - 'Windows 首次异常交给进程内处理器后不再上报调试器，只断在第二次机会会漏掉真正的触发点'
 
-- id: tech:syscall-sequence-observability
-  name: 系统调用序列观测
-  name_en: System Call Tracing
+- id: tech:multithread-breakpoint-sync
+  name: 多线程断点同步
+  name_en: Multithread Breakpoint Synchronization
   domain: [dom:ad-userdebug]
   parent: dom:ad-userdebug
-  def: 只观察目标与内核边界的调用序列，不改代码，用来定位文件、进程与调试相关行为。难点是并发下顺序错乱，关键调用易被海量正常调用淹没。
-  difficulty: 2
+  def: 在断点命中时冻结全部线程并在恢复时重新布点，避免只停一个线程导致状态被并发改写。难点是线程创建与销毁时机不固定，新线程会漏掉断点。
+  difficulty: 3
   prerequisites:
   - tech:user-mode-attach-freeze
-  artifacts: [art:elf64, art:pe64]
+  artifacts: [art:pe64, art:elf64]
   outputs:
-  - 系统调用时序
-  - 敏感调用点清单
-  - 实际调用与导入表的差异
-  cost: low
-  false_positive_risk: low
+  - 全线程停止点与栈快照
+  - 并发状态一致性判定
+  - 新建线程的断点补设记录
+  cost: medium
+  false_positive_risk: medium
   commands:
-  - cmd: 'strace -f -p {{pid}} -e trace=ptrace,execve,openat -s 128'
-    note: '只跟调试相关与关键文件调用，降低无关噪声'
-  - cmd: 'strace -f -tt -e trace=ptrace -o trace.log {{binary}}'
-    note: '从启动开始记录 ptrace 调用并带时间戳，能看到自我附加发生的时机'
+  - cmd: 'gdb -q -batch -p {{pid}} -ex "set scheduler-locking on" -ex continue'
+    note: '只让当前线程推进、其余线程保持停止，观察窗口内不会被并发改写'
+  - cmd: 'gdb -q -batch -p {{pid}} -ex "info threads" -ex "thread apply all bt"'
+    note: '命中后一次性抓全部线程栈，确认是否有线程在窗口内继续推进'
   pitfalls:
-  - '追踪工具本身靠 ptrace 附加，目标若做跟踪检测会立刻改变行为，观察结果不再代表原始状态'
-  - '多线程下输出先后不等于实际发生顺序，必须带时间戳并结合线程号判读'
+  - '只停住命中线程时其余线程会继续改被观察的数据，结构体可能读到撕裂状态'
+  - '运行期新建的线程不会继承断点与暂停状态，必须在创建后补设，否则会漏跟踪'
 
 - id: tech:conditional-breakpoint-watch
   name: 条件断点与数据观察
@@ -623,8 +623,7 @@
   parent: dom:ad-detect
   def: 用自我附加或读跟踪者字段判断是否已被调试，失败即说明有人先接管。难点是检测与调试器的抢占有时序，检测逻辑本身会改变进程状态。
   difficulty: 2
-  prerequisites:
-  - tech:syscall-sequence-observability
+  prerequisites: []
   artifacts: [art:elf64, art:so]
   outputs:
   - 跟踪者进程标识
@@ -705,6 +704,7 @@
   pitfalls:
   - '只清零一处标志而堆标志仍带调试位，成套读取的检测照样命中'
   - '改写后不保留原始值，调试器自身依赖这些标志判断状态时会行为异常'
+  note: 与「调试标志位读取」成对：识别侧读标志字节与全局标志字段，绕过侧原地写回同一字段并保留原值。
 
 - id: tech:debug-register-clearing
   name: 调试寄存器清零
@@ -730,6 +730,7 @@
   pitfalls:
   - '清零只作用于当前线程上下文，其他线程的断点配置仍在，逐线程处理才完整'
   - '清控制寄存器会让原有硬件断点失效，关键路径必须改用不会暴露观察点的手段'
+  note: 与「调试寄存器检查」成对：识别侧逐线程读寄存器，绕过侧清使能位并回读确认。
 
 - id: tech:debug-object-detach
   name: 调试对象解绑
@@ -755,6 +756,7 @@
   pitfalls:
   - '解绑会终止调试事件循环，进程内已有的软件断点不会被自动摘除，残留断点会引发访问异常'
   - '解绑后重新附加会被目标检测到二次附加行为，比一次附加更可疑'
+  note: 与「调试端口与对象检查」成对：识别侧查端口与对象句柄，绕过侧解除关联后自行维护断点。
 
 - id: tech:breakpoint-integrity-bypass
   name: 断点完整性绕过
@@ -781,6 +783,7 @@
   pitfalls:
   - '检测若对磁盘文件取哈希，内存里的回填毫无意义，必须改为不修改映像的观察方式'
   - '回填窗口期仍存在，检测只需在窗口内采样一次就能发现断点，时序要一并考虑'
+  note: 与「断点与完整性检查」成对：识别侧扫断点字节与校验和，绕过侧回填原始字节或不写映像。
 
 - id: tech:time-source-hooking
   name: 时间源返回伪造
@@ -806,6 +809,7 @@
   pitfalls:
   - '计时指令不经系统调用，用户态钩子对它无效，只能靠虚拟化层或改代码路径处理'
   - '时间返回被改成固定值后，目标自身的超时与轮询逻辑会一起失效，反而产生新的可观测异常'
+  note: 与「时间差检测」成对：识别侧测代码段耗时，绕过侧在接口层给出一致读数。
 
 - id: tech:exception-chain-takeover
   name: 异常链接管
@@ -831,6 +835,7 @@
   pitfalls:
   - '处理器返回值语义分继续执行与重新抛出，改写错了会把可控异常变成进程终止'
   - '接管只对走处理器链的异常有效，直接终止进程的异常类型不会经过这条路径'
+  note: 与「异常与陷阱标志检测」成对：识别侧看分发是否被接管，绕过侧插入处理器并给出期望返回值。
 
 - id: tech:kernel-info-masking
   name: 内核调试信息屏蔽
@@ -858,6 +863,7 @@
   pitfalls:
   - '内核调试开关所在共享页是只读的，强行改写需要先改页属性，处理不当会引发整机异常'
   - '不同编译号的内核结构偏移不同，按固定偏移改写会命中相邻字段并造成稳定性的隐蔽问题'
+  note: 与「系统调试状态查询」成对：识别侧查全局调试标志，绕过侧在共享页或查询接口层遮蔽。
 
 - id: tech:ptrace-interception
   name: ptrace 拦截与伪装
@@ -868,7 +874,6 @@
   difficulty: 4
   prerequisites:
   - tech:linux-ptrace-selfcheck
-  - tech:syscall-sequence-observability
   artifacts: [art:elf64, art:so]
   outputs:
   - 拦截生效的调用清单
@@ -888,6 +893,7 @@
   - '跟踪者字段在附加后由内核维护，用户态伪造只骗过读文件的路径，不改变内核里的真实状态'
   references:
   - https://man7.org/linux/man-pages/man2/ptrace.2.html
+  note: 与「ptrace 自附加检测」成对：识别侧读跟踪者字段，绕过侧拦调用并伪造返回值。
 
 - id: tech:module-handle-hiding
   name: 模块与句柄遮蔽
@@ -920,6 +926,7 @@
 # ============================================================
 # 五、对抗演进与隐蔽调试（dom:ad-armsrace）
 # ============================================================
+  note: 与「调试环境痕迹枚举」成对：识别侧多路枚举痕迹，绕过侧从链表与句柄表里摘除。
 
 - id: tech:hardware-execution-breakpoint
   name: 硬件执行断点
@@ -931,6 +938,7 @@
   prerequisites:
   - tech:single-step-execution
   - tech:debug-register-clearing
+  - tech:multithread-breakpoint-sync
   artifacts: [art:pe64, art:elf64]
   outputs:
   - 无代码改写的断点现场
@@ -995,8 +1003,8 @@
   commands:
   - cmd: 'strace -f -e trace=mprotect -p {{pid}}'
     note: '观察目标自身的页保护调用，确认保护位被谁、在何时重设'
-  - cmd: 'gdb -q -batch {{binary}} -ex "catch signal SIGSEGV" -ex run'
-    note: '在段错误信号处停下，确认异常来自保护页而不是真实越界'
+  - cmd: 'grep -E "^(---p|rw-p)" /proc/{{pid}}/maps'
+    note: '找出权限被改成不可访问的区间，那就是保护页所在的范围'
   pitfalls:
   - '保护粒度是整页，相邻数据也会触发异常，事件量会远超实际目标点'
   - '保护位触发一次后被硬件清除，忘记重设会让后续访问完全不被捕获'
