@@ -76,3 +76,70 @@ export function difficultyFieldLabel(kind: string): string {
 export function difficultyNotTracked(kind: string): boolean {
   return kind === 'artifact';
 }
+
+/**
+ * 载体 kind（03-DATA-SCHEMA §2.5 的枚举，顺序即规范里的登记顺序）。
+ * 这是**枚举标签**，不是知识数据：矩阵列头靠它排版，新取值原样回显。
+ */
+export const ARTIFACT_KIND_ORDER = [
+  'executable',
+  'library',
+  'package',
+  'bytecode',
+  'firmware',
+  'kernel-object',
+  'runtime-dump',
+  'capture',
+  'document',
+  'script',
+  'shellcode',
+  'container',
+] as const;
+
+const ARTIFACT_KIND_LABEL: Readonly<Record<string, string>> = {
+  executable: '可执行文件',
+  library: '动态库',
+  package: '分发包',
+  bytecode: '字节码',
+  firmware: '固件',
+  'kernel-object': '内核模块',
+  'runtime-dump': '内存转储',
+  capture: '抓包',
+  document: '文档',
+  script: '脚本',
+  shellcode: 'Shellcode',
+  container: '容器镜像',
+};
+
+/** 列头用的短标签：矩阵一行要放 12 列，长名字会把表撑爆 */
+const ARTIFACT_KIND_SHORT: Readonly<Record<string, string>> = {
+  executable: '可执行',
+  library: '库',
+  package: '包',
+  bytecode: '字节码',
+  firmware: '固件',
+  'kernel-object': '内核',
+  'runtime-dump': '转储',
+  capture: '抓包',
+  document: '文档',
+  script: '脚本',
+  shellcode: 'Shellcode',
+  container: '容器',
+};
+
+export function artifactKindLabel(kind: string): string {
+  return ARTIFACT_KIND_LABEL[kind] ?? kind;
+}
+
+export function artifactKindShort(kind: string): string {
+  return ARTIFACT_KIND_SHORT[kind] ?? kind;
+}
+
+/** 按规范顺序排，未登记的取值排在最后（不让新类型插队） */
+export function sortArtifactKinds(kinds: Iterable<string>): string[] {
+  const present = new Set(kinds);
+  const known = ARTIFACT_KIND_ORDER.filter((kind) => present.has(kind));
+  const rest = [...present].filter((kind) => !(ARTIFACT_KIND_ORDER as readonly string[]).includes(kind));
+  return [...known, ...rest];
+}
+

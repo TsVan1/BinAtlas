@@ -56,3 +56,41 @@ export function ResetIcon() {
     </svg>
   );
 }
+
+export function CopyIcon() {
+  return (
+    <svg {...base}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 5.5V3.8c0-.7-.6-1.3-1.3-1.3H3.8c-.7 0-1.3.6-1.3 1.3v5.4c0 .7.6 1.3 1.3 1.3h1.7" />
+    </svg>
+  );
+}
+
+/** 树节点的展开箭头：旋转由 CSS 的 .tree-chevron 负责，这里只画形状 */
+export function ChevronIcon() {
+  return (
+    <svg width={10} height={10} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3.5 2 7 5 3.5 8" />
+    </svg>
+  );
+}
+
+export function ExternalIcon() {
+  return (
+    <svg width={11} height={11} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M9.5 2.5h4v4" />
+      <path d="M13.5 2.5 7 9" />
+      <path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
+    </svg>
+  );
+}
+
+export function DotIcon({ size = 4 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 4 4" fill="currentColor" aria-hidden>
+      <circle cx="2" cy="2" r="2" />
+    </svg>
+  );
+}
+
+

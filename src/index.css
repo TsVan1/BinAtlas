@@ -1,7 +1,8 @@
 /*
  * 全局样式与设计 token。
  * 色值唯一来源：06-MOTION-SPEC.md §1.1（色板）/ §1.2（节点类型色相）/ §1.3（字号刻度）。
- * 本阶段只做静态样式：不写任何 keyframes、transition 或动画工具类。
+ * 动效只做「承载信息」的那几组：树的展开、选中辉光、矩阵 hover、复制反馈、步骤卡入场。
+ * 时长统一走 §1.5 的 token，组件里不写裸 transition。
  */
 @import "tailwindcss";
 
@@ -16,21 +17,19 @@
   --color-fg-dim: #8b98a5;
   --color-fg-muted: #5a6673;
   --color-accent: #22d3ee;
+  --color-accent-soft: #7ce7f7;
   --color-magenta: #f472b6;
   --color-amber: #fbbf24;
   --color-lime: #a3e635;
 
   /*
    * §1.2 节点类型色相。写 hex 而不是 hsl()：Sigma 的 WebGL 渲染器只吃 hex/rgb，
-   * 这些 hex 与文档里的 hsl() 是同一个颜色（换算保留在注释里，便于核对）。
-   *   domain    hsl(210 14% 58%)   artifact hsl(190 70% 55%)   technique hsl(160 65% 48%)
-   *   tool      hsl(150 60% 45%)   concept  hsl(265 65% 68%)   format    hsl(230 55% 62%)
-   *   attack    hsl(350 75% 62%)   ecosystem hsl(38 85% 60%)    ai        hsl(85 65% 55%)
+   * 这些 hex 与文档里的 hsl() 是同一个颜色。
    */
   --color-kind-domain: #8594a3;
   --color-kind-artifact: #3cc2dd;
   --color-kind-technique: #2bca95;
-  --color-kind-tool: #2eb873;
+  --color-kind-tool: #f59e0b;
   --color-kind-concept: #a578e2;
   --color-kind-format: #697bd3;
   --color-kind-attack: #e7556e;
@@ -52,6 +51,15 @@
   --font-mono:
     ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", "PingFang SC",
     monospace;
+
+  /* §1.5 动效 token 的 CSS 侧副本（与 src/motion/tokens.ts 同源） */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-state: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
 }
 
 @layer base {
@@ -75,7 +83,7 @@
   }
 
   ::selection {
-    background-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+    background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
   }
 
   :focus-visible {
@@ -110,18 +118,375 @@
   }
 }
 
-/* §1.4 背景：单层 24px 网格，静态，不做动画 */
+/* -------------------------------------------------------------------------
+ * 背景：近黑 + 三团极淡的霓虹光斑 + 24px 网格 + 扫描线。
+ * 都是为了「深空」质感，不参与信息编码，所以全部低透明度。
+ * ---------------------------------------------------------------------- */
+.atlas-shell {
+  position: relative;
+  background:
+    radial-gradient(1100px 520px at 10% -12%, rgba(34, 211, 238, 0.13), transparent 62%),
+    radial-gradient(900px 480px at 102% -6%, rgba(244, 114, 182, 0.08), transparent 58%),
+    radial-gradient(760px 420px at 48% 118%, rgba(163, 230, 53, 0.05), transparent 62%),
+    var(--color-bg);
+}
+
+.atlas-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(230, 237, 243, 0.022) 0 1px,
+    transparent 1px 6px
+  );
+  opacity: 0.5;
+}
+
 .atlas-grid {
   background-color: var(--color-bg);
   background-image:
-    linear-gradient(to right, var(--color-panel-raised) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--color-panel-raised) 1px, transparent 1px);
+    linear-gradient(to right, rgba(26, 34, 44, 0.55) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(26, 34, 44, 0.55) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 
-/* §1.4 玻璃拟态：全站只给命令面板用这一处 */
 .atlas-glass {
-  background-color: color-mix(in srgb, var(--color-panel) 82%, transparent);
+  background-color: color-mix(in srgb, var(--color-panel) 86%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
+}
+
+/* 面板：靠 1px 边框分层，不用大投影 */
+.atlas-panel {
+  background: linear-gradient(180deg, #0b0f14 0%, #090d12 100%);
+  border: 1px solid var(--color-border);
+}
+
+.atlas-panel-raised {
+  background: linear-gradient(180deg, #0e1319 0%, #0b1016 100%);
+  border: 1px solid var(--color-border);
+}
+
+/* 顶部/底部一条 1px 的霓虹渐变：给分区一个「通电」的边界 */
+.atlas-edge-glow {
+  position: relative;
+}
+.atlas-edge-glow::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(34, 211, 238, 0.55) 18%,
+    rgba(244, 114, 182, 0.35) 52%,
+    rgba(34, 211, 238, 0.18) 78%,
+    transparent
+  );
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.neon-text {
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.45);
+}
+
+.neon-ring {
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.22),
+    0 0 22px -8px rgba(34, 211, 238, 0.55);
+}
+
+/* 品牌标记：一个带内发光的方块，不加载任何图片 */
+.brand-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid rgba(34, 211, 238, 0.42);
+  background:
+    linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(11, 15, 20, 0.9) 55%),
+    #0b0f14;
+  box-shadow:
+    inset 0 0 12px rgba(34, 211, 238, 0.28),
+    0 0 18px -6px rgba(34, 211, 238, 0.7);
+  color: #d6fbff;
+}
+
+/* -------------------------------------------------------------------------
+ * 视图 Tab
+ * ---------------------------------------------------------------------- */
+.view-tab {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  transition:
+    color var(--dur-fast) var(--ease-state),
+    background-color var(--dur-fast) var(--ease-state),
+    border-color var(--dur-fast) var(--ease-state);
+}
+
+.view-tab:hover {
+  color: var(--color-fg);
+  background-color: rgba(255, 255, 255, 0.035);
+}
+
+.view-tab[data-active="true"] {
+  color: var(--color-accent-soft);
+  border-color: rgba(34, 211, 238, 0.32);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.16), rgba(34, 211, 238, 0.05));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 20px -8px rgba(34, 211, 238, 0.75);
+}
+
+.view-tab[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: -7px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.85), transparent);
+}
+
+/* -------------------------------------------------------------------------
+ * 目录树
+ * ---------------------------------------------------------------------- */
+.tree-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  text-align: left;
+  transition:
+    background-color var(--dur-fast) var(--ease-state),
+    color var(--dur-fast) var(--ease-state),
+    box-shadow var(--dur-base) var(--ease-state);
+}
+
+.tree-row:hover {
+  background-color: rgba(230, 237, 243, 0.035);
+}
+
+.tree-row[data-onpath="true"] {
+  border-left-color: rgba(34, 211, 238, 0.35);
+  background-color: rgba(34, 211, 238, 0.035);
+}
+
+.tree-row[data-selected="true"] {
+  border-left-color: var(--color-accent);
+  color: var(--color-fg);
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.2), rgba(34, 211, 238, 0.045) 62%, transparent);
+  box-shadow:
+    inset 0 0 22px -14px rgba(34, 211, 238, 0.9),
+    0 0 24px -14px rgba(34, 211, 238, 0.8);
+}
+
+.tree-row[data-selected="true"] .tree-name {
+  color: #eafcff;
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.4);
+}
+
+.tree-row[data-cursor="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.35);
+}
+
+.tree-chevron {
+  transition: transform var(--dur-fast) var(--ease-enter), color var(--dur-fast) var(--ease-state);
+}
+
+.tree-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 行入场：展开时才挂载，所以这条动画天然只在「展开」瞬间播 */
+.tree-row {
+  animation: row-in var(--dur-base) var(--ease-enter);
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * 作战手册：命令行 / 复制反馈
+ * ---------------------------------------------------------------------- */
+.cmd-row {
+  position: relative;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, rgba(14, 19, 25, 0.9), rgba(9, 13, 18, 0.9));
+  transition:
+    border-color var(--dur-fast) var(--ease-state),
+    box-shadow var(--dur-base) var(--ease-state);
+}
+
+.cmd-row:hover {
+  border-color: rgba(34, 211, 238, 0.32);
+  box-shadow: 0 0 22px -14px rgba(34, 211, 238, 0.8);
+}
+
+.cmd-copy {
+  transition:
+    color var(--dur-fast) var(--ease-state),
+    background-color var(--dur-fast) var(--ease-state),
+    border-color var(--dur-fast) var(--ease-state);
+}
+
+.cmd-copy[data-copied="true"] {
+  color: var(--color-lime);
+  border-color: rgba(163, 230, 53, 0.45);
+  background-color: rgba(163, 230, 53, 0.1);
+  box-shadow: 0 0 18px -8px rgba(163, 230, 53, 0.85);
+}
+
+.copy-flash {
+  animation: copy-flash 520ms var(--ease-state);
+}
+
+@keyframes copy-flash {
+  0% {
+    box-shadow: inset 0 0 0 1px rgba(163, 230, 53, 0.55), 0 0 26px -8px rgba(163, 230, 53, 0.8);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px transparent, 0 0 0 0 transparent;
+  }
+}
+
+.fade-up {
+  animation: fade-up var(--dur-base) var(--ease-enter);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * 矩阵
+ * ---------------------------------------------------------------------- */
+.matrix-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid rgba(34, 211, 238, 0.09);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  transition:
+    transform var(--dur-fast) var(--ease-state),
+    box-shadow var(--dur-base) var(--ease-state),
+    border-color var(--dur-fast) var(--ease-state),
+    background-color var(--dur-base) var(--ease-state);
+  will-change: transform;
+}
+
+.matrix-cell:hover {
+  transform: scale(1.16);
+  z-index: 5;
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.35),
+    0 10px 26px -10px rgba(34, 211, 238, 0.8);
+}
+
+.matrix-cell[data-zero="true"] {
+  color: var(--color-fg-muted);
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(139, 152, 165, 0.13) 0 1px,
+    transparent 1px 5px
+  );
+}
+
+.matrix-cell[data-zero="true"]:hover {
+  color: var(--color-fg-dim);
+  background-color: rgba(139, 152, 165, 0.06);
+}
+
+/* -------------------------------------------------------------------------
+ * 工作流步骤
+ * ---------------------------------------------------------------------- */
+.step-in {
+  animation: step-in 240ms var(--ease-enter) backwards;
+  animation-delay: calc(var(--step-index, 0) * 45ms);
+}
+
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.step-rail {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.5), rgba(34, 211, 238, 0.08));
+}
+
+/* 命令面板入场（G10 的静态降级版：落定 + 淡入，不做 FLIP） */
+.palette-in {
+  animation: palette-in var(--dur-base) var(--ease-enter);
+}
+
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * 无障碍：prefers-reduced-motion 全关（§0 A3）
+ * ---------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+
+  .matrix-cell:hover {
+    transform: none;
+  }
 }

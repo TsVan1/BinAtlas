@@ -1,34 +1,69 @@
-/** 底栏：节点数 · 边数 · 命中数 · fps（+ 数据告警与 schema 版本） */
+/** 底栏：数据规模 · 当前选中 · 告警 · fps / schema / 构建时间 */
 import { useFps } from '../hooks/useFps';
 import { formatDateTime, orDash } from '../lib/format';
 import type { GraphMeta } from '../lib/types';
+import type { ViewKey } from '../lib/urlState';
+
+const VIEW_LABEL: Readonly<Record<ViewKey, string>> = {
+  tree: '目录树',
+  matrix: '矩阵',
+  workflow: '工作流',
+  graph: '关系图',
+};
 
 interface StatusBarProps {
+  view: ViewKey;
   nodeCount: number;
   edgeCount: number;
-  matchedCount: number;
+  techniqueCount: number;
+  domainCount: number;
+  selectedName: string | null;
   meta: GraphMeta;
   warnings: string[];
 }
 
-export function StatusBar({ nodeCount, edgeCount, matchedCount, meta, warnings }: StatusBarProps) {
+export function StatusBar({
+  view,
+  nodeCount,
+  edgeCount,
+  techniqueCount,
+  domainCount,
+  selectedName,
+  meta,
+  warnings,
+}: StatusBarProps) {
   const fps = useFps();
 
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-border bg-panel px-4 text-11 text-fg-muted">
+    <footer className="relative z-10 flex h-7 shrink-0 items-center gap-3 border-t border-border bg-panel px-3 text-11 text-fg-muted">
+      <span className="flex items-center gap-1.5">
+        <span className="h-[3px] w-[3px] rounded-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.9)]" aria-hidden />
+        <span className="text-accent-soft">{VIEW_LABEL[view]}</span>
+      </span>
+
+      <span className="h-3 w-px bg-border" aria-hidden />
+
+      <span>
+        领域 <span className="font-mono text-fg-dim">{domainCount}</span>
+      </span>
+      <span>
+        技术 <span className="font-mono text-fg-dim">{techniqueCount}</span>
+      </span>
       <span>
         节点 <span className="font-mono text-fg-dim">{nodeCount}</span>
       </span>
       <span>
         边 <span className="font-mono text-fg-dim">{edgeCount}</span>
       </span>
-      <span>
-        命中{' '}
-        <span className={matchedCount === nodeCount ? 'font-mono text-fg-dim' : 'font-mono text-accent'}>
-          {matchedCount}
-        </span>{' '}
-        / {nodeCount}
-      </span>
+
+      {selectedName !== null && (
+        <>
+          <span className="h-3 w-px bg-border" aria-hidden />
+          <span className="max-w-[280px] truncate">
+            选中 <span className="text-fg-dim">{selectedName}</span>
+          </span>
+        </>
+      )}
 
       {warnings.length > 0 && (
         <span className="text-amber" title={warnings.join('\n')}>

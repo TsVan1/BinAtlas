@@ -7,7 +7,7 @@
  * 2. **解析期不信任任何字段**：类型不对就降级或跳过，并记进 warnings，绝不 throw 到白屏。
  * 3. **不补数据**：缺字段就是缺，不猜默认值。
  */
-import type { AtlasData, AtlasEdge, AtlasNode, GraphMeta, SearchDoc } from './types';
+import type { AtlasCommand, AtlasData, AtlasEdge, AtlasNode, GraphMeta, SearchDoc } from './types';
 import { truncate } from './format';
 
 /** 构建产物目录；BASE_URL 跟随 Vite 的 base 配置（默认 /） */
@@ -39,6 +39,24 @@ const readStringArray = (value: unknown): string[] =>
 
 const readFiniteNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+/** 命令模板：`cmd` 为空的条目直接丢（复制按钮没有可复制的内容） */
+function parseCommands(raw: unknown): AtlasCommand[] {
+  if (!Array.isArray(raw)) return [];
+
+  const items: AtlasCommand[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const cmd = readString(entry['cmd']).trim();
+    if (cmd === '') continue;
+    const note = readString(entry['note']).trim();
+    items.push(note === '' ? { cmd } : { cmd, note });
+  }
+  return items;
+}
+
+const readNonEmptyStrings = (value: unknown): string[] =>
+  readStringArray(value).filter((item) => item.trim() !== '');
 
 async function readJson(file: AtlasFile, signal: AbortSignal): Promise<unknown> {
   const url = `${GRAPH_DIR}${file}`;
@@ -124,6 +142,28 @@ function parseNodes(raw: unknown): ParseResult<AtlasNode> {
     if (maintainStatus !== '') node.maintain_status = maintainStatus;
     const license = readString(entry['license']).trim();
     if (license !== '') node.license = license;
+
+    // v2：目录树父节点 + 作战手册三件套
+    const parent = readString(entry['parent']).trim();
+    if (parent !== '') node.parent = parent;
+
+    const commands = parseCommands(entry['commands']);
+    if (commands.length > 0) node.commands = commands;
+
+    const pitfalls = readNonEmptyStrings(entry['pitfalls']);
+    if (pitfalls.length > 0) node.pitfalls = pitfalls;
+
+    const references = readNonEmptyStrings(entry['references']);
+    if (references.length > 0) node.references = references;
+
+    // v3：载体类别 + 前置技术（投影层已保证取值，这里仍然容忍缺失）
+    const artifactKind = readString(entry['artifact_kind']).trim();
+    if (artifactKind !== '') node.artifact_kind = artifactKind;
+
+    const prerequisites = readNonEmptyStrings(entry['prerequisites']);
+    if (prerequisites.length > 0) {
+      node.prerequisites = [...new Set(prerequisites)];
+    }
 
     items.push(node);
   }
