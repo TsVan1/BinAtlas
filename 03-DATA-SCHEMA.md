@@ -166,6 +166,43 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
 
 ---
 
+### 2.5 `artifact` — 载体/分析对象
+
+```yaml
+- id: art:elf64
+  name: ELF64 可执行文件
+  kind: executable
+  def: Linux/Unix 主流可执行格式，含动态段、PLT/GOT 与节表，是用户态逆向最常见的输入。
+  platforms: [linux]
+```
+
+| 字段 | 类型 | 必填 | 规范 |
+| --- | --- | --- | --- |
+| `name` | string | ✅ | 中文，≤20 字 |
+| `kind` | enum | ✅ | **只能取下表的值，不得自造** |
+| `def` | string | ✅ | ≤120 字，说清这是什么载体、逆向时的主要障碍 |
+| `platforms` | enum[] | ❌ | `win`/`linux`/`mac`/`android`/`ios`/`hardware`/`web` |
+
+**`kind` 枚举（新增取值必须先在本文档登记）**
+
+| kind | 含义 | 典型实例 |
+| --- | --- | --- |
+| `executable` | 可直接执行的文件 | `pe32` `pe64` `elf32` `elf64` `mach-o` `pe-dotnet` |
+| `library` | 动态/静态库 | `so` `dll` `dylib` |
+| `package` | 分发容器 | `apk` `ipa` `jar` |
+| `bytecode` | 中间表示 | `dex` `il` `wasm` `lua-bytecode` `evm-bytecode` |
+| `firmware` | 固件镜像 | `firmware-image` `uefi-bios` `rtos-image` `rom` |
+| `kernel-object` | 内核模块或驱动 | `kernel-module` `driver` |
+| `runtime-dump` | 运行时转储 | `memory-dump` `crash-dump` |
+| `capture` | 网络/总线抓包 | `pcap` `usb-capture` |
+| `document` | 文档类载体 | `document` `pdf` `office` |
+| `script` | 脚本 | `script` `browser-js` `powershell` |
+| `shellcode` | 位置无关代码片段 | `shellcode` |
+| `container` | 容器或镜像 | `container-image` |
+
+> **为什么 kind 必须统一**：它是交叉矩阵视图的轴。一旦允许各写各的，
+> "符号执行 × 载体"这张表会被拆成十几列同义项，矩阵直接失去意义。
+
 ### 2.6 实时层附加字段（Overlay 专用，Base 里不出现）
 
 由 `04-LIVE-KNOWLEDGE.md` 的 Overlay 层注入，合并视图里可见：
@@ -296,6 +333,19 @@ _history:                   # 字段级变更历史（compact 时导出到 _audi
 | `stub` | 仅占位（≤2 条内容） |
 
 ---
+
+### 4.5 `source` 与 `verified_at` 的适用范围
+
+| 节点类型 | 是否强制 | 理由 |
+| --- | --- | --- |
+| `tool` / `ai` / `ecosystem` | **强制** | 含版本号、官网、维护状态等**会过期**的事实 |
+| `domain` / `technique` / `concept` / `format` / `attack` / `artifact` | 选填 | 结构性定义，不随版本失效 |
+
+**但有一条硬约束**：结构性节点里一旦写了**具体年份、CVE 编号、版本号、厂商名称**，
+就必须同时给 `source` 与 `verified_at`。
+
+> 归纳成一句：**不是每条都要出处，而是「凡写了会过期的事实，就必须有出处」。**
+> 这条同时覆盖 AGENTS.md 里"每条记录必须有 source"的宽泛表述。
 
 ## 5. 22 个工具类目与代表工具（收录范围基准）
 

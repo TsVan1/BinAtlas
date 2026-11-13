@@ -1,0 +1,81 @@
+# BinAtlas 知识库 · 载体
+# 规范：03-DATA-SCHEMA.md §2.5（kind 枚举已收编，不得自造）
+# 本批 19 条，覆盖试点技术实际引用的全部载体
+
+- id: art:pe32
+  name: PE32 可执行文件
+  kind: executable
+  def: 32 位 Windows 可执行映像，DOS 头 + NT 头 + 节表 + 导入导出表构成骨架。分析关键是节区熵与导入表，加壳后这两处会先失真。
+- id: art:pe64
+  name: PE32+ 可执行文件
+  kind: executable
+  def: 64 位 Windows 可执行映像，与 PE32 的差别在可选头与基址字段。多数分析手法通用，但指针宽度使内联补丁与地址计算不能照搬 32 位经验。
+- id: art:pe-dotnet
+  name: .NET 托管程序集
+  kind: executable
+  def: 带 CLI 头的 PE 映像，真实逻辑在 CIL 字节码与元数据表中，不是原生汇编。分析要还原到中间语言层，混淆后靠元数据异常与控制流平坦化识别。
+- id: art:elf32
+  name: ELF32 可执行文件
+  kind: executable
+  def: 32 位 ELF 映像，含段表/节表、动态链接信息与 PLT/GOT 跳转结构。MIPS 与 ARM 固件里的服务程序多数落在这个格式上，字节序需单独确认。
+- id: art:elf64
+  name: ELF64 可执行文件
+  kind: executable
+  def: 64 位 ELF 映像，结构与 ELF32 同源但重定位模型不同（常用 PIE + GOT 相对寻址）。分析时地址与基址的关系比 32 位更容易被误读。
+- id: art:mach-o
+  name: Mach-O 可执行文件
+  kind: executable
+  def: Apple 平台可执行与动态库格式，由 __TEXT/__DATA 段与 LC_ 加载命令描述布局。iOS 上 App Store 分发版本通常带加密，静态分析前需先拿到解密后的映像。
+- id: art:so
+  name: ELF 共享库
+  kind: library
+  def: 可被动态装载的 ELF 库，Android 与嵌入式设备里的原生实现多在此。关键特征是导出符号表、JNI 注册结构与字符串常量的加密痕迹。
+- id: art:apk
+  name: Android 应用包
+  kind: package
+  def: Android 分发包，本质是 zip：清单、classes.dex、资源表、签名块与原生库都在里面。分析第一步是核对签名与清单声明，再看哪些内容被加固方案改写过。
+- id: art:dex
+  name: Dalvik 字节码
+  kind: bytecode
+  def: Android 的字节码容器，方法、字段与字符串以查表形式组织，单个文件的方法引用数受 64K 上限约束，超出时会被拆成多个 dex。加固应用里常见整体加密的空壳
+    dex。
+- id: art:ipa
+  name: iOS 应用包
+  kind: package
+  def: iOS 分发包，zip 内含 Payload 下的 .app 目录，主体是可执行映像、资源与签名材料。分析入口是签名与描述文件，再进到映像本身的加密与符号情况。
+- id: art:jar
+  name: Java 归档包
+  kind: package
+  def: Java 归档，zip 内含 class 字节码与资源，也可携带原生库。移动与服务端场景里常作为第三方 SDK 的分发形态，混淆程度通常低于商业加固方案。
+- id: art:firmware-image
+  name: 固件镜像
+  kind: firmware
+  def: 厂商整包固件，多为多分区拼接并带私有头部与校验字段，文件系统边界不写在任何标准位置。定位靠 magic 扫描加熵分布推断，加密段是解包的主要障碍。
+- id: art:uefi-bios
+  name: UEFI 固件
+  kind: firmware
+  def: 主板固件映像，内部按固件卷与固件文件系统的层级组织各阶段驱动与配置变量。分析关注引导链各阶段的可写性与签名校验是否被绕过。
+- id: art:rtos-image
+  name: RTOS 固件
+  kind: firmware
+  def: 实时操作系统固件，通常没有通用文件系统，代码与数据整体链接成单一映像。分析要先定位中断向量表与任务初始化，再按调用关系切分功能块。
+- id: art:memory-dump
+  name: 内存镜像
+  kind: runtime-dump
+  def: 进程或整机的运行时内存快照，含已解密的代码段、配置与凭据残留。价值在于绕过静态加壳，难点是没有格式信息，符号与结构都要按特征重新定位。
+- id: art:pcap
+  name: 流量抓包
+  kind: capture
+  def: 按链路层记录的数据包序列，还原协议要靠流重组与端口/载荷特征推断。加密流量只能看到元数据，行为判定退化为连接时序与目标分布分析。
+- id: art:document
+  name: 带主动内容的文档
+  kind: document
+  def: 含宏、嵌入对象或脚本动作的文档，本体是结构化容器而非可执行文件。分析要看的是自动执行触发链与外联行为，而不是文件头结构。
+- id: art:script
+  name: 脚本文件
+  kind: script
+  def: 以源文本或轻量字节码形式存在的可执行内容，天然可读也可高度混淆。分析难点是还原混淆后的真实调用（动态拼接、编码套娃），而非理解语法本身。
+- id: art:shellcode
+  name: Shellcode
+  kind: shellcode
+  def: 无文件格式的位置无关机器码，没有导入表也没有节区，靠加载器自行解析 API。静态分析要手工重建 API 解析逻辑，动态分析则需先给它造一个可执行的宿主。
