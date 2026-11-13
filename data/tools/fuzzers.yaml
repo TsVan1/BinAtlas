@@ -1,37 +1,34 @@
-# BinAtlas 知识库 · 工具 · fuzzers（模糊测试）
-# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 5
-# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+# BinAtlas 工具档案
 
 - id: tool:aflpp
   name: AFL++
-  aliases: [AFLplusplus, afl-fuzz]
+  aliases:
+  - AFLplusplus
+  - afl-fuzz
   category: fuzzers
   domain:
-    - dom:firmware
-    - dom:malware-analysis
+  - dom:malware-analysis
   artifacts:
-    - art:elf32
-    - art:elf64
-    - art:firmware-image
+  - art:elf32
+  - art:elf64
+  - art:firmware-image
   license: oss
   pricing: 免费
   platforms:
-    - linux
-    - mac
+  - linux
+  - mac
   oss: true
   learning_curve: 4
   maintain_status: active
   first_release: 2019
-  latest_version: "5.03c"
+  latest_version: 5.03c
   url: https://aflplus.plus/
   source:
-    - https://github.com/AFLplusplus/AFLplusplus
-    - https://aflplus.plus/
+  - https://github.com/AFLplusplus/AFLplusplus
+  - https://aflplus.plus/
   verified_at: 2026-11-13
-  headless: yes
+  headless: 'yes'
   ai_ready: api
-  tldr: >-
-    解决没有源码也想找到崩溃输入的问题：编译期插桩或 QEMU 模式下做覆盖引导变异，把目标服务的输入空间压到能跑出可复现 crash 的规模。
-    适合固件里网络服务的漏洞挖掘、协议解析器的批量测试、以及 CI 里对自有二进制做持续 fuzz。
-    短板是种子与字典质量直接决定效果，插桩编译常受构建环境限制；覆盖率反馈在无符号闭源目标上诊断困难，结果去重仍需人工判断。
+  tldr: 解决没有源码也想找到崩溃输入的问题：编译期插桩或 QEMU 模式下做覆盖引导变异，把目标服务的输入空间压到能跑出可复现 crash 的规模。 适合固件里网络服务的漏洞挖掘、协议解析器的批量测试、以及
+    CI 里对自有二进制做持续 fuzz。 短板是种子与字典质量直接决定效果，插桩编译常受构建环境限制；覆盖率反馈在无符号闭源目标上诊断困难，结果去重仍需人工判断。
   note: 纯 CLI 驱动，可脚本批量编排；无 MCP，属 §4.2 提到的 fuzzer 自动化断层一侧。

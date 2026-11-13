@@ -228,6 +228,12 @@ export interface GraphNode {
   artifact_kind?: string;
   /** technique 专属：前置技术 ID（§2.2）。前置/下游面板与工作流排序都依赖它 */
   prerequisites?: string[];
+  /** technique 专属：详情/背景（§2.2） */
+  detail?: string;
+  /** technique 专属：原理（§2.2） */
+  principle?: string;
+  /** technique 专属：操作步骤（§2.2） */
+  procedure?: string[];
 }
 
 export interface GraphEdge {
@@ -350,6 +356,12 @@ function projectNode(node: CompiledNode): GraphNode {
   if (node.kind === 'technique') {
     const pre = readStringArray(raw['prerequisites']);
     if (pre.length > 0) out.prerequisites = pre;
+    const detail = readString(raw['detail']);
+    if (detail !== undefined) out.detail = detail;
+    const principle = readString(raw['principle']);
+    if (principle !== undefined) out.principle = principle;
+    const procedure = readStringArray(raw['procedure']);
+    if (procedure.length > 0) out.procedure = procedure;
   }
 
   return out;

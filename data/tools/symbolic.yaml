@@ -1,40 +1,37 @@
-# BinAtlas 知识库 · 工具 · symbolic（符号执行 / 约束求解）
-# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 4
-# 版本号与维护状态核验于 2026-11-13（官方站点 / PyPI）
+# BinAtlas 工具档案
 
 - id: tool:angr
   name: angr
-  aliases: [angr-management, angr.io]
+  aliases:
+  - angr-management
+  - angr.io
   category: symbolic
   domain:
-    - dom:firmware
-    - dom:malware-analysis
+  - dom:malware-analysis
   artifacts:
-    - art:elf32
-    - art:elf64
-    - art:pe32
-    - art:pe64
-    - art:shellcode
+  - art:elf32
+  - art:elf64
+  - art:pe32
+  - art:pe64
+  - art:shellcode
   license: oss
   pricing: 免费
   platforms:
-    - win
-    - linux
-    - mac
+  - win
+  - linux
+  - mac
   oss: true
   learning_curve: 5
   maintain_status: active
   first_release: null
-  latest_version: "10.0.6"
+  latest_version: 10.0.6
   url: https://angr.io/
   source:
-    - https://github.com/angr/angr
-    - https://angr.io/
+  - https://github.com/angr/angr
+  - https://angr.io/
   verified_at: 2026-11-13
-  headless: yes
+  headless: 'yes'
   ai_ready: api
-  tldr: >-
-    解决"要自动找出触发某段代码的输入"的问题：把二进制提升到 VEX 中间表示后做符号执行，用约束求解生成满足校验条件的按键或协议报文。
-    适合固件里单函数级的口令校验绕过、CTF 类逆向题的自动化求解、以及恶意样本配置解密路径的批量探索。
-    短板是符号执行路径爆炸严重，中等规模函数就可能算不动，环境依赖与库调用需手工建模打桩；结论可靠性受建模假设限制，不适合直接当作漏洞证据。
+  tldr: 解决"要自动找出触发某段代码的输入"的问题：把二进制提升到 VEX 中间表示后做符号执行，用约束求解生成满足校验条件的按键或协议报文。 适合固件里单函数级的口令校验绕过、CTF
+    类逆向题的自动化求解、以及恶意样本配置解密路径的批量探索。 短板是符号执行路径爆炸严重，中等规模函数就可能算不动，环境依赖与库调用需手工建模打桩；结论可靠性受建模假设限制，不适合直接当作漏洞证据。
   note: 官方另有 angr-management GUI；无官方 MCP，Python API 是唯一稳定入口。

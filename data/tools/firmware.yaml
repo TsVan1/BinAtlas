@@ -1,39 +1,38 @@
-# BinAtlas 知识库 · 工具 · firmware（固件分析与仿真）
-# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 11
-# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+# BinAtlas 工具档案
 
 - id: tool:qemu
   name: QEMU
-  aliases: [qemu-user, qemu-system, qemu-user-static]
+  aliases:
+  - qemu-user
+  - qemu-system
+  - qemu-user-static
   category: firmware
   domain:
-    - dom:firmware
+  - dom:re
   artifacts:
-    - art:elf32
-    - art:elf64
-    - art:so
-    - art:firmware-image
-    - art:rtos-image
+  - art:elf32
+  - art:elf64
+  - art:so
+  - art:firmware-image
+  - art:rtos-image
   license: oss
   pricing: 免费
   platforms:
-    - win
-    - linux
-    - mac
+  - win
+  - linux
+  - mac
   oss: true
   learning_curve: 4
   maintain_status: active
   first_release: 2003
-  latest_version: "11.2.0"
+  latest_version: 11.2.0
   url: https://www.qemu.org/
   source:
-    - https://www.qemu.org/
-    - https://gitlab.com/qemu-project/qemu
+  - https://www.qemu.org/
+  - https://gitlab.com/qemu-project/qemu
   verified_at: 2026-11-13
-  headless: yes
+  headless: 'yes'
   ai_ready: api
-  tldr: >-
-    解决异构架构固件服务无法在宿主机上直接跑起来的问题：用户态模式直接执行 MIPS/ARM 的单个可执行文件，系统模式则能整机起固件镜像验证启动链。
-    适合固件解包后的服务验证、缺失设备条件下的漏洞复现，以及给 gdbserver 提供可调试的执行环境。
-    短板是外设、NVRAM 与厂商私有硬件依赖全靠打桩补齐，整机仿真经常卡在启动脚本或内核补丁上；性能开销大，不适合大规模并发测试。
+  tldr: 解决异构架构固件服务无法在宿主机上直接跑起来的问题：用户态模式直接执行 MIPS/ARM 的单个可执行文件，系统模式则能整机起固件镜像验证启动链。
+    适合固件解包后的服务验证、缺失设备条件下的漏洞复现，以及给 gdbserver 提供可调试的执行环境。 短板是外设、NVRAM 与厂商私有硬件依赖全靠打桩补齐，整机仿真经常卡在启动脚本或内核补丁上；性能开销大，不适合大规模并发测试。
   note: 用户态模式（qemu-user）是固件项目最常用路径；QMP/monitor 可脚本控制，但无官方 Python API。

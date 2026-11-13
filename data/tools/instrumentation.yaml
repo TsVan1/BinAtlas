@@ -1,79 +1,75 @@
-# BinAtlas 知识库 · 工具 · instrumentation（DBI / 插桩 / 追踪）
-# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 3
-# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+# BinAtlas 工具档案
 
 - id: tool:frida
   name: Frida
-  aliases: [frida-tools, frida-server, frida-gadget]
+  aliases:
+  - frida-tools
+  - frida-server
+  - frida-gadget
   category: instrumentation
   domain:
-    - dom:mobile
-    - dom:malware-analysis
+  - dom:malware-analysis
   artifacts:
-    - art:apk
-    - art:dex
-    - art:ipa
-    - art:mach-o
-    - art:so
-    - art:elf64
+  - art:apk
+  - art:dex
+  - art:ipa
+  - art:mach-o
+  - art:so
+  - art:elf64
   license: oss
   pricing: 免费
   platforms:
-    - win
-    - linux
-    - mac
-    - android
-    - ios
+  - win
+  - linux
+  - mac
+  - android
+  - ios
   oss: true
   learning_curve: 4
   maintain_status: active
   first_release: null
-  latest_version: "17.26.2"
+  latest_version: 17.26.2
   url: https://frida.re/
   source:
-    - https://github.com/frida/frida
-    - https://frida.re/
+  - https://github.com/frida/frida
+  - https://frida.re/
   verified_at: 2026-11-13
-  headless: yes
+  headless: 'yes'
   ai_ready: mcp
-  tldr: >-
-    解决静态看不到的运行时真相问题：进程内注入后用 JS 挂钩 ObjC/Java/native 方法，读写参数、返回值与内存，能在不重打包的前提下拿到解密后的明文与真实分支。
-    适合移动应用证书固定绕过、加固样本脱壳验证、以及恶意样本解密与网络行为的动态确认。
-    短板是各系统运行时结构频繁变动导致脚本易碎，加固应用会主动检测注入痕迹并退出，iOS 侧还需越狱或重签名环境。
+  tldr: 解决静态看不到的运行时真相问题：进程内注入后用 JS 挂钩 ObjC/Java/native 方法，读写参数、返回值与内存，能在不重打包的前提下拿到解密后的明文与真实分支。
+    适合移动应用证书固定绕过、加固样本脱壳验证、以及恶意样本解密与网络行为的动态确认。 短板是各系统运行时结构频繁变动导致脚本易碎，加固应用会主动检测注入痕迹并退出，iOS
+    侧还需越狱或重签名环境。
   note: 社区有 frida-mcp-server（PyPI）等 MCP 包装；frida-trace/frida CLI 与 Python 绑定可完全脚本化。
-
 - id: tool:unicorn
   name: Unicorn
-  aliases: [Unicorn Engine, unicorn-engine]
+  aliases:
+  - Unicorn Engine
+  - unicorn-engine
   category: instrumentation
   domain:
-    - dom:firmware
-    - dom:malware-analysis
+  - dom:malware-analysis
   artifacts:
-    - art:shellcode
-    - art:elf32
-    - art:elf64
+  - art:shellcode
+  - art:elf32
+  - art:elf64
   license: oss
   pricing: 免费
   platforms:
-    - win
-    - linux
-    - mac
+  - win
+  - linux
+  - mac
   oss: true
   learning_curve: 3
   maintain_status: stale
   first_release: 2015
-  latest_version: "2.1.4"
+  latest_version: 2.1.4
   url: https://www.unicorn-engine.org/
   source:
-    - https://github.com/unicorn-engine/unicorn
-    - https://www.unicorn-engine.org/
+  - https://github.com/unicorn-engine/unicorn
+  - https://www.unicorn-engine.org/
   verified_at: 2026-11-13
-  headless: yes
+  headless: 'yes'
   ai_ready: api
-  tldr: >-
-    解决只想要 CPU 语义、不想要整机仿真的问题：把一段机器码或单个函数塞进仿真器里执行，精确控制指令流并观察寄存器与内存变化。
-    适合脱壳脚本解密算法、shellcode 快速定位行为、以及固件里单个校验函数的可控执行。
-    短板是只仿真 CPU 不含操作系统与系统调用，任何外部依赖都要自己 hook 打桩；项目最近一次发版为 2025-09-09，更新节奏已明显放缓。
+  tldr: 解决只想要 CPU 语义、不想要整机仿真的问题：把一段机器码或单个函数塞进仿真器里执行，精确控制指令流并观察寄存器与内存变化。 适合脱壳脚本解密算法、shellcode
+    快速定位行为、以及固件里单个校验函数的可控执行。 短板是只仿真 CPU 不含操作系统与系统调用，任何外部依赖都要自己 hook 打桩；项目最近一次发版为 2025-09-09，更新节奏已明显放缓。
   note: 按 §4.1 判 stale：最近一次发版 2025-09-09，距今约 14 个月。Python 绑定是其主接口。
-

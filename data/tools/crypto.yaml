@@ -1,38 +1,35 @@
-# BinAtlas 知识库 · 工具 · crypto（密码算法识别与数据变换）
-# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 16
-# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub releases）
+# BinAtlas 工具档案
 
 - id: tool:cyberchef
   name: CyberChef
-  aliases: [CyberChef, GCHQ CyberChef]
+  aliases:
+  - CyberChef
+  - GCHQ CyberChef
   category: crypto
   domain:
-    - dom:malware-analysis
-    - dom:mobile
+  - dom:malware-analysis
   artifacts:
-    - art:script
-    - art:document
+  - art:script
+  - art:document
   license: oss
   pricing: 免费
   platforms:
-    - web
-    - win
-    - linux
-    - mac
+  - web
+  - win
+  - linux
+  - mac
   oss: true
   learning_curve: 1
   maintain_status: active
   first_release: 2016
-  latest_version: "11.5.0"
+  latest_version: 11.5.0
   url: https://gchq.github.io/CyberChef/
   source:
-    - https://github.com/gchq/CyberChef
-    - https://gchq.github.io/CyberChef/
+  - https://github.com/gchq/CyberChef
+  - https://gchq.github.io/CyberChef/
   verified_at: 2026-11-13
-  headless: yes
+  headless: 'yes'
   ai_ready: api
-  tldr: >-
-    解决编码套娃与算法识别只能靠临时脚本的问题：把 Base64、异或、RC4、AES、gzip 等上百种变换拖成操作链，边看中间产物边试，几步就能剥开混淆层级。
-    适合脚本样本的混淆还原、移动样本里配置字符串的解密试错，以及把一段可复现的解密链固化成可交付的操作链。
-    短板是只管一次性数据变换、不做批量调度与结论管理；链一长就难读，复杂算法仍需回到代码层验证参数与密钥来源。
+  tldr: 解决编码套娃与算法识别只能靠临时脚本的问题：把 Base64、异或、RC4、AES、gzip 等上百种变换拖成操作链，边看中间产物边试，几步就能剥开混淆层级。
+    适合脚本样本的混淆还原、移动样本里配置字符串的解密试错，以及把一段可复现的解密链固化成可交付的操作链。 短板是只管一次性数据变换、不做批量调度与结论管理；链一长就难读，复杂算法仍需回到代码层验证参数与密钥来源。
   note: 官方提供 Node 侧 API（npm 包），可把操作链当代码复用；无 MCP。

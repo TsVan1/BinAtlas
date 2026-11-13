@@ -1,255 +1,92 @@
-# BinAtlas 知识库 · 关系边 · 技法 → 工具（uses）
-# 规范：03-DATA-SCHEMA.md §3（kind 语义 / 必填字段 / 方向语义）
-# 本批 41 条。连接判据：只在该技法与该工具的真实工序重合处连边，
-# 依据取自各工具的 tldr / note；schema §5 名录里提到但尚未建节点的工具
-# （Scylla、binwalk、jadx、BinDiff 等）一律不连，缺口记入 ORPHAN-NEEDS.md。
-
-# ============ 固件与嵌入式（dom:firmware）============
-
-- from: tech:firmware-extraction
-  to: tool:radare2
-  kind: uses
-  weight: 0.5
-  rationale: 整包镜像上要定位分区边界时，r2 的纯命令行 magic 搜索与偏移跳转不依赖 GUI、不挑宿主架构，适合在解包前后快速试探段起始位置。局限是它只做边界定位，重建文件系统目录树仍需外部解包器，因此权重只给 0.5。
-
-- from: tech:firmware-emulation
-  to: tool:qemu
-  kind: uses
-  weight: 0.95
-  rationale: 要让 MIPS/ARM 固件里的服务进程在 x86 宿主机上真正跑起来，QEMU 用户态模式可直接执行单个可执行文件，系统模式则能整机起镜像验证启动链；它的 -g 参数还能挂 gdbstub 供远程调试，是本技法唯一不可替代的执行底座。
-
-- from: tech:firmware-emulation
-  to: tool:gdb-pwndbg
-  kind: uses
-  weight: 0.8
-  rationale: 仿真服务起来之后必须能中断、看栈与改内存才对得起"仿真"二字：qemu-user 的 gdbstub 由 gdbserver 协议对接，GDB+pwndbg 负责跨架构断点、结构体还原与寄存器改写，是仿真环境里验证漏洞与补齐桩函数的操作界面。
-
-- from: tech:firmware-emulation
-  to: tool:unicorn
-  kind: uses
-  weight: 0.6
-  rationale: 整机仿真常在外设与启动脚本处卡死，此时退化成单函数级仿真更快：把固件里一个校验或解密函数抠出来塞进 Unicorn 裸执行，只看寄存器与内存变化，绕开整套设备依赖。代价是系统调用全部要自己 hook。
-
-- from: tech:uefi-firmware-analysis
-  to: tool:ghidra
-  kind: uses
-  weight: 0.75
-  rationale: UEFI 卷里的 DXE 驱动与 SMM 模块本质是 PE32+ 映像，Ghidra 的 PE 加载器与处理器模块能直接吃下这些冷门架构的模块，且 headless 脚本可批量导出全部模块的函数清单做横向比对。
-
-- from: tech:uefi-firmware-analysis
-  to: tool:ida-pro
-  kind: uses
-  weight: 0.75
-  rationale: 逐模块审签名校验与 NVRAM 变量写入点时，Hex-Rays 的结构体与类型重建能把固件协议结构体还原成可读 C，跨模块交叉引用也比脚本方案更适合长期维护同一份分析工程。
-
-- from: tech:uefi-firmware-analysis
-  to: tool:qemu
-  kind: uses
-  weight: 0.5
-  rationale: 固件卷拆完后的安全配置不能只看静态：把提取出的 DXE 驱动挂进 QEMU+OVMF 起一遍，观察引导链在哪一阶段校验失败、写保护是否真的生效，是验证签名结论的唯一手段。局限是它复现不了目标主板的芯片组行为。
-
-- from: tech:hardcoded-credential-mining
-  to: tool:radare2
-  kind: uses
-  weight: 0.7
-  rationale: 解包后要在成百上千个 ELF/CGI 程序里批量搜私钥、口令与默认账户，r2pipe 驱动 r2 做无界面的字符串与引用扫描是这条流水线的合理形态；IDA 一类 GUI 工具做不了这种跨文件批量遍历。
-
-- from: tech:hardcoded-credential-mining
-  to: tool:ghidra
-  kind: uses
-  weight: 0.6
-  rationale: 候选凭据是否可达要看它被哪段代码读取：Ghidra 的交叉引用与脚本接口能在批处理模式下把"字符串被哪些函数引用"一次导出，用来区分死配置与真实登录路径。
-
-- from: tech:firmware-diffing
-  to: tool:radare2
-  kind: uses
-  weight: 0.6
-  rationale: radare2 套件自带 radiff2，可对两个版本的可执行体做字节级与函数级差分并列出变更函数地址，是先在命令行粗筛"哪几个函数变了"的最短路径，之后再进反编译器精读。
-
-- from: tech:firmware-diffing
-  to: tool:ghidra
-  kind: uses
-  weight: 0.6
-  rationale: 固件相邻版本间地址漂移与函数重排会淹没真实语义变化，Ghidra 的 Version Tracking 用函数特征相似度自动做跨版本匹配，产出对应关系后差分才有意义。
-
-# ============ 移动安全（dom:mobile）============
-
-- from: tech:mobile-app-static-analysis
-  to: tool:ida-pro
-  kind: uses
-  weight: 0.7
-  rationale: APK 里的 dex 与原生 so 都要落到指令层才能看清加固改写了什么，IDA 的 DEX 加载器与 ARM/ARM64 反编译器可在同一工程里把 Java 层与 JNI 层对照起来看。
-
-- from: tech:mobile-app-static-analysis
-  to: tool:radare2
-  kind: uses
-  weight: 0.6
-  rationale: 需要在 CI 或无图形界面的机器上批量解出 apk 内的 dex 与原生库并导出类名、字符串与导入符号时，r2 的 apk/dex 解析与 rabin2 命令行是最省事的一条路。
-
-- from: tech:mobile-app-static-analysis
-  to: tool:binary-ninja
-  kind: uses
-  weight: 0.5
-  rationale: iOS 侧的 ipa 里是 Mach-O 与 Objective-C 运行时结构，Binary Ninja 的 Mach-O 加载与 ObjC 元数据解析能把类方法表直接展开，比通用反汇编器少一层手工还原。
-
-- from: tech:mobile-runtime-instrumentation
-  to: tool:frida
-  kind: uses
-  weight: 0.95
-  rationale: 移动端运行时插桩的主体就是 Frida：注入进程后挂钩 Java/ObjC/native 方法，读写参数、返回值与内存，能不重打包拿到解密后的明文字节码与真实分支，这条路径上没有等价替代品。
-
-- from: tech:mobile-runtime-instrumentation
-  to: tool:lldb
-  kind: uses
-  weight: 0.7
-  rationale: iOS 侧越狱环境下，Frida 之外还需要 LLDB 经 debugserver 附加到进程，才能下断点、读 arm64e 指针签名后的真实地址并观察崩溃上下文，Frida 的脚本层看不到这些寄存器级细节。
-
-- from: tech:mobile-runtime-instrumentation
-  to: tool:gdb-pwndbg
-  kind: uses
-  weight: 0.5
-  rationale: Android 原生产进程不便注入 JS 时，可用 gdbserver 附加目标进程再由 GDB 远程调试，pwndbg 对 so 里堆与结构体布局的呈现比 Frida 的读写接口更贴近内存真相。
-
-- from: tech:mobile-app-unpacking
-  to: tool:frida
-  kind: uses
-  weight: 0.85
-  rationale: 加固方案的自解密发生在运行时，主流做法是用 Frida 挂钩 ClassLoader 与 dex 加载入口，在内存中把已解密的 dex 段整体 dump 出来再离线修复方法表，静态工具在这里看不到明文。
-
-- from: tech:network-traffic-interception
-  to: tool:burp-suite
-  kind: uses
-  weight: 0.9
-  rationale: 中间人代理是本技法的落点：Burp 把 HTTP(S) 报文拦下来改参数、重放与批量扫描，接口与私有字段推断全靠请求与响应的对照，证书固定场景还需先由客户端侧绕过才看得到明文。
-
-- from: tech:network-traffic-interception
-  to: tool:wireshark
-  kind: uses
-  weight: 0.8
-  rationale: 代理只覆盖 HTTP(S)，非 HTTP 的私有协议与 TLS 握手失败原因要靠包层证据：Wireshark/tshark 的流重组与握手告警能判定连接是证书被拒还是协议不做 HTTP，避免在代理侧空转。
-
-- from: tech:network-traffic-interception
-  to: tool:frida
-  kind: uses
-  weight: 0.7
-  rationale: 目标启用证书固定或双向认证时代理直接收不到连接，必须用 Frida 挂钩信任链校验函数改返回值或替换信任锚点，让客户端接受代理证书，否则本技法第一步就走不下去。
-
-- from: tech:android-component-surface-audit
-  to: tool:radare2
-  kind: uses
-  weight: 0.5
-  rationale: 没有 apktool 或反编译失败时，可用 rabin2/r2 直接解析 apk 与 dex，列出组件类名、权限字符串与 intent filter 相关常量，作为导出面清单的兜底来源。
-
-- from: tech:android-component-surface-audit
-  to: tool:frida
-  kind: uses
-  weight: 0.55
-  rationale: 导出声明与运行时实际权限校验常不一致，用 Frida 挂钩组件的 onCreate/getIntent 处理入口，记录真实传入的 extras 与调用方身份，才能把静态清单上的可疑项做成可复现的越权调用链。
-
-# ============ 恶意软件分析（dom:malware-analysis）============
+# BinAtlas 关系边
 
 - from: tech:malware-static-triage
   to: tool:detect-it-easy
   kind: uses
   weight: 0.95
   rationale: 样本到手第一问是"加没加壳、什么编译器写的"，DIE 用签名库直接给出壳与语言判定并附带节区熵，这个结论决定后续静态信号是否还值得信，是研判流程的入口判别器。
-
 - from: tech:malware-static-triage
   to: tool:capa
   kind: uses
   weight: 0.9
   rationale: 逐条读汇编数能力太慢，capa 用 API 组合与字符串规则把样本映射成"具备进程注入、持久化、反调试"一类高层能力标签，直接产出可复核的能力清单与家族线索。
-
 - from: tech:malware-static-triage
   to: tool:cyberchef
   kind: uses
   weight: 0.7
   rationale: 脚本与文档样本的可疑片段常是 Base64/异或/压缩多层套娃，CyberChef 把变换拖成操作链边看中间产物边试，能在不写临时脚本的前提下剥开混淆层级并固化成可交付的解密链。
-
 - from: tech:malware-static-triage
   to: tool:yara
   kind: uses
   weight: 0.6
   rationale: 研判结论要与历史样本比对才能出家族线索，用 YARA 规则扫样本库是最直接的方式；反过来，研判产出的稳定字节串也在这一步被写成初版规则供批扫验证。
-
 - from: tech:behavioral-dynamic-analysis
   to: tool:x64dbg
   kind: uses
   weight: 0.85
   rationale: 样本行为要能停下来看：x64dbg 在主进程里设条件断点、观察内存布局与调用栈，边跑边验证"这一步到底改了什么"，是行为时序与持久化动作逐条确认的操作台。
-
 - from: tech:behavioral-dynamic-analysis
   to: tool:wireshark
   kind: uses
   weight: 0.9
-  rationale: 网络行为是动态分析最硬的证据，Wireshark/tshark 把抓包展开到协议字段层，给出 C2 域名、心跳间隔与上传内容，加密流量下至少还能拿到连接时序与 SNI，用来产出网络 IOC。
-
+  rationale: 网络行为是动态分析最硬的证据，Wireshark/tshark 把抓包展开到协议字段层，给出 C2 域名、心跳间隔与上传内容，加密流量下至少还能拿到连接时序与
+    SNI，用来产出网络 IOC。
 - from: tech:behavioral-dynamic-analysis
   to: tool:volatility3
   kind: uses
   weight: 0.7
   rationale: 样本退出后内存里的进程、模块与网络连接结构是唯一还留着的现场，Volatility 3 从内存镜像重建这些结构，能捞出注入痕迹与已解密的载荷，补上"运行结束后"这一段观察。
-
 - from: tech:behavioral-dynamic-analysis
   to: tool:windbg
   kind: uses
   weight: 0.55
   rationale: 样本是驱动或带内核组件的加载器时，用户态调试器根本看不到其行为：WinDbg 能下内核断点、看驱动对象与回调注册，把 rootkit 类样本的挂钩动作纳入行为记录。
-
 - from: tech:behavioral-dynamic-analysis
   to: tool:frida
   kind: uses
   weight: 0.7
   rationale: 需要在不重打包的前提下挂钩样本的 API 调用并打印真实参数时，Frida 的进程内注入比反复重启调试器轻得多，特别适合记录解密函数与网络库的入参出参。
-
 - from: tech:executable-unpacking
   to: tool:x64dbg
   kind: uses
   weight: 0.9
-  rationale: 脱壳的核心动作是在壳的自解密循环结束后定位原始入口点并转储进程内存，x64dbg 的硬件断点、内存断点与自带转储能一次性完成"停住→dump→修 IAT"这套操作。
-
+  rationale: 脱壳的核心动作是在壳的自解密循环结束后定位原始入口点并转储进程内存，x64dbg 的硬件断点、内存断点与自带转储能一次性完成"停住→dump→修
+    IAT"这套操作。
 - from: tech:executable-unpacking
   to: tool:detect-it-easy
   kind: uses
   weight: 0.65
   rationale: 脱壳路径取决于壳的类型：先用 DIE 判定是 UPX 这类一键脱的、还是自研壳或虚拟化壳，再决定走自动脱壳、手工找 OEP 还是直接放弃静态路线，判定错了后面全是白工。
-
 - from: tech:executable-unpacking
   to: tool:ida-pro
   kind: uses
   weight: 0.55
   rationale: 自研壳的跳转常被花指令与间接寻址打散，先在 IDA 里静态跟出解压循环与 OEP 候选点，再回调试器下断点，比纯动态逐指令试探省数倍时间。
-
 - from: tech:executable-unpacking
   to: tool:unicorn
   kind: uses
   weight: 0.6
   rationale: 只做解密的壳不必把整个样本跑起来：把解密循环那段机器码抠进 Unicorn 裸执行，精确控制每步寄存器与内存，可安全地批量试出密钥与明文段，绕开反调试与环境检测。
-
 - from: tech:executable-unpacking
   to: tool:angr
   kind: uses
   weight: 0.45
   rationale: 自研壳若把密钥藏在无系统调用的纯算术校验里，符号执行可把密文段当符号变量反推密钥与明文段，省掉逐指令单步。成立条件苛刻——循环复杂或一碰系统调用就算不动，因此只作辅助路径。
-
 - from: tech:detection-signature-authoring
   to: tool:yara
   kind: uses
   weight: 0.95
   rationale: 把分析结论固化成可批量扫描的特征，落点就是 YARA 规则：字节串、节区约束与条件组合写成一个文件即可扫磁盘文件、进程内存与流量载荷，是这类交付物的标准载体。
-
 - from: tech:detection-signature-authoring
   to: tool:capa
   kind: uses
   weight: 0.55
   rationale: 行为级特征比字节串更耐版本更新，capa 的规则以 YARA 语法描述 API 组合，可直接作为"写行为特征"的模板与回归工具：新规则写完用良性与同族样本跑一遍命中差异。
-
 - from: tech:malware-family-attribution
   to: tool:capa
   kind: uses
   weight: 0.65
   rationale: 家族聚类需要一个稳定的能力指纹，capa 输出的能力标签不随壳与编译差异剧烈波动，把批量样本的能力集合做相似度比对，比直接比字节串更能扛住版本更新。
-
 - from: tech:malware-family-attribution
   to: tool:yara
   kind: uses

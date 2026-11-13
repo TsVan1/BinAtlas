@@ -94,6 +94,9 @@ atk:anti-debug-ptrace eco:pwn-college             ai:ida-pro-mcp
 | `commands` | obj[] | ❌ | **作战手册核心**：`{cmd, note}`。命令模板用 `{{占位符}}` |
 | `pitfalls` | string[] | ❌ | 常见坑，每条一句话 |
 | `references` | string[] | ❌ | 参考链接 |
+| `detail` | string | ❌ | **详情/背景**，≤400 字：适用场景、与相邻技术的区别、版本或环境注意点 |
+| `principle` | string | ❌ | **原理**，≤300 字：为什么这么做有效、底层机制（内存管理/调用约定/检测引擎逻辑） |
+| `procedure` | string[] | ❌ | **操作步骤**，3–8 条有序，每条一句话，说清「先做什么、看到什么再做什么」 |
 
 > `commands` 是本系统从「词条」变成「手册」的关键字段。**允许在 cmd 里出现工具名**
 > （命令本来就要用工具），但 `def`/`name` 里仍不写工具名——工具归属由 `uses` 边表达。

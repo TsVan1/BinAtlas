@@ -1,34 +1,6 @@
 # BinAtlas 知识库 · 领域（含子领域，parent 指向上级）
 # 规范：03-DATA-SCHEMA.md §2.1
 
-- id: dom:firmware
-  name: 固件与嵌入式安全
-  name_en: Firmware & Embedded Security
-  def: 研究路由器、摄像头、IoT 设备与主板固件的提取、解包、仿真与漏洞挖掘。核心难点是无源码且异构架构（MIPS/ARM）并存，加上外设与 NVRAM 缺失，仿真常跑不到目标服务就卡死。
-  artifacts:
-  - art:firmware-image
-  - art:rtos-image
-  - art:uefi-bios
-  - art:elf32
-  - art:so
-  entry_difficulty: 4
-  coverage: partial
-  note: 难度 4 的依据是"需系统学习 + 实操环境"（§4.3）：要同时具备逆向基础、 Linux 系统层知识，并有一台可拆可刷的真实设备兜底。工具侧待
-    A2 补齐后重评 coverage。 当前主要瓶颈是仿真成功率受外设依赖牵制，不是分析能力本身。
-- id: dom:mobile
-  name: 移动安全
-  name_en: Mobile Security
-  def: 研究 Android/iOS 应用的逆向、加固对抗、流量与隐私行为审计。核心难点是运行时环境封闭：代码签名、完整性校验、证书固定与只读系统分区叠加，静态结论必须回真机动态验证才算数。
-  artifacts:
-  - art:apk
-  - art:dex
-  - art:ipa
-  - art:so
-  - art:mach-o
-  entry_difficulty: 3
-  coverage: partial
-  note: 难度 3 的依据是"逆向基础 + 1-2 门前置技术"（§4.3）：现代移动逆向多数环节有成熟流程， 入门门槛低于固件。本批 5 条技术以 Android
-    为主线，iOS 侧目前只覆盖到 ipa / Mach-O 载体层，缺 iOS 专有条目（签名与描述文件、越狱环境检测对抗），需下一批补。
 - id: dom:malware-analysis
   name: 恶意软件分析
   name_en: Malware Analysis

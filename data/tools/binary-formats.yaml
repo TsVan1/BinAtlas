@@ -1,39 +1,37 @@
-# BinAtlas 知识库 · 工具 · binary-formats（二进制格式与编辑）
-# 规范：03-DATA-SCHEMA.md §2.3 字段表 / §4.1–§4.5 判定标准 / §5 类目 7
-# 版本号与维护状态核验于 2026-11-13（官方站点 / GitHub）
+# BinAtlas 工具档案
 
 - id: tool:detect-it-easy
   name: Detect It Easy
-  aliases: [DIE, diec]
+  aliases:
+  - DIE
+  - diec
   category: binary-formats
   domain:
-    - dom:malware-analysis
-    - dom:firmware
+  - dom:malware-analysis
   artifacts:
-    - art:pe32
-    - art:pe64
-    - art:elf32
-    - art:elf64
-    - art:mach-o
+  - art:pe32
+  - art:pe64
+  - art:elf32
+  - art:elf64
+  - art:mach-o
   license: oss
   pricing: 免费
   platforms:
-    - win
-    - linux
-    - mac
+  - win
+  - linux
+  - mac
   oss: true
   learning_curve: 2
   maintain_status: active
   first_release: null
-  latest_version: "unknown"
+  latest_version: unknown
   url: https://github.com/horsicq/Detect-It-Easy
   source:
-    - https://github.com/horsicq/Detect-It-Easy
+  - https://github.com/horsicq/Detect-It-Easy
   verified_at: 2026-11-13
   headless: partial
   ai_ready: api
-  tldr: >-
-    解决样本到手先要判断"加没加壳、什么编译器、什么语言"的问题：用特征库匹配壳与编译器签名，顺带给出节区熵、入口点与签名信息。
-    适合恶意样本分析的第一步分类、判断要不要先脱壳，以及批量样本的壳与语言统计。
+  tldr: 解决样本到手先要判断"加没加壳、什么编译器、什么语言"的问题：用特征库匹配壳与编译器签名，顺带给出节区熵、入口点与签名信息。 适合恶意样本分析的第一步分类、判断要不要先脱壳，以及批量样本的壳与语言统计。
     短板是签名库对自研壳与商业加固识别有限，误判时会误导后续流程；GUI 与命令行版本能力不完全对等，脚本化程度远低于反汇编器一类工具。
-  note: 官方发行不带语义化版本号（releases 以数据库/Beta 标签滚动更新，程序与数据库分离），故 latest_version 记 unknown；diec 为命令行批处理版本。最近提交 2026-11-12。
+  note: 官方发行不带语义化版本号（releases 以数据库/Beta 标签滚动更新，程序与数据库分离），故 latest_version 记 unknown；diec
+    为命令行批处理版本。最近提交 2026-11-12。
