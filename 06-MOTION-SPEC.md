@@ -44,7 +44,7 @@
 domain      hsl(210 14% 58%)   中性灰蓝 —— 背景结构，不抢眼
 artifact    hsl(190 70% 55%)   水青
 technique   hsl(160 65% 48%)   青绿
-tool        hsl(150 60% 45%)   绿
+tool        hsl( 38 92% 52%)   橙   ← 原为绿色，与 technique 色相仅差 10°，画布上无法区分，已上调
 concept     hsl(265 65% 68%)   紫
 format      hsl(230 55% 62%)   靛
 attack      hsl(350 75% 62%)   洋红

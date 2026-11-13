@@ -35,7 +35,7 @@ const KIND_COLOR: Readonly<Record<string, string>> = {
   domain: '#8594A3',
   artifact: '#3CC2DD',
   technique: '#2BCA95',
-  tool: '#2EB873',
+  tool: '#F59E0B',
   concept: '#A578E2',
   format: '#697BD3',
   attack: '#E7556E',
